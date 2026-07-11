@@ -1,0 +1,13 @@
+<launch>
+    <include file="$(find nvi_bringup)/launch/nvi_realsense.launch" />
+    <include file="$(find nvi_bringup)/launch/nvi_phone_gps.launch" />
+    <include file="$(find nvi_belt)/launch/nvi_belt.launch" />
+    <!-- <>xxx -->
+    <arg name="record_path" default="test.bag"/>
+    <node pkg="rosbag" name="data_record" type="record" 
+    args="/tf_static /camera/imu 
+    /camera/rgb/camera_info /camera/rgb/image_raw  /camera/rgb/image_raw/compressed
+    /camera/depth/camera_info /camera/depth/image_raw
+    /ublox_driver/receiver_lla
+    -O ../Datasets/$(arg record_path)" />
+</launch>

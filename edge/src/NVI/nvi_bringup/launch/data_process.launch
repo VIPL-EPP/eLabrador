@@ -1,0 +1,12 @@
+<launch>
+    <include file="$(find nvi_speech)/launch/nvi_speech.launch" />
+
+    <include file="$(find vins_estimator)/launch/realsense_color.launch" />
+    <include file="$(find semantic_slam)/launch/semantic_mapping.launch" />
+    <include file="$(find nvi_planning)/launch/nvi_planning.launch" />
+
+    <include file="$(find nvi_belt)/launch/nvi_belt.launch" />
+    <include file="$(find nvi_voice)/launch/nvi_voice.launch" />
+    
+    <include file="$(find nvi_management)/launch/nvi_management.launch" />
+</launch>

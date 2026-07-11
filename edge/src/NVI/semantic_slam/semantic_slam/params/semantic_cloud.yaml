@@ -1,0 +1,37 @@
+# Camera intrinsic matrix parameters (OpenCV)
+# realsense d435i
+# camera:
+#   fx: 612.544
+#   fy: 612.359
+#   cx: 332.926
+#   cy: 242.537
+
+# realsense d455
+camera:
+  fx: 386.854
+  fy: 385.786
+  cx: 323.006
+  cy: 241.577
+
+  width: 640
+  height: 480
+
+semantic_pcl:
+  color_image_topic: "/camera/rgb/image_raw" # demo.bag
+  depth_image_topic: "/camera/depth/image_raw"
+  compressed_color_image_topic: False 
+  rgbd_topic: False # "/camera/rgbd/image_raw/compressed" # color_image_topic and depth_image_topic will be ignored if rgbd_topic is not False
+  compressed_rgbd: True
+  # depth_image_topic: "/camera/depth_registered/image_raw" # demo.bag
+  point_type: 1
+
+  frame_id: "camera_link"
+  # frame_id: "/camera_rgb_optical_frame" # demo.bag
+  
+  #dataset: "ade20k" # ade20k
+  # dataset: "sunrgbd" # sunrgbd
+  dataset: "mapillary" # mapillary
+  # dataset: "cityscapes" # cityscapes
+  model_name: "mask2former"
+
+  # instance_format: "bbox3d_tight"

@@ -1,0 +1,7 @@
+<launch>
+    <!-- output="log|screen" -->
+    <node pkg="nvi_management" name="nvi_management" type="nvi_management_node.py" cwd="node" respawn="true" output="screen">
+        <param name="key_msg_path" type = "str" value="$(find nvi_management)/config/key_msg.json"/>
+        <param name="route_config_path" type = "str" value="$(find nvi_management)/config/route_config.json"/>
+    </node>
+</launch>

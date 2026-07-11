@@ -1,0 +1,8 @@
+<launch>
+    <arg name="route" default="rongkew2e"/>
+    <!-- output="log|screen" -->
+    <node pkg="nvi_management" name="nvi_system_config" type="nvi_system_config_node.py" cwd="node" respawn="true" output="screen">
+        <param name="route_config_path" type = "str" value="$(find nvi_management)/config/route_config.json"/>
+        <param name="route_name" type = "str" value="$(arg route)"/>
+    </node>
+</launch>

@@ -1,0 +1,8 @@
+<launch>
+    <remap from="/image/rgb/compressed" to="/camera/rgb/image_raw/compressed" />
+    <remap from="/image/depth" to="/camera/depth/image_raw" />
+    <remap from="/image/rgbd/compressed" to="/camera/rgbd/image_raw/compressed" />
+    <node pkg="rgbd_transit" name="compressed_rgbd_transit" type="compressed_rgbd_transit_node" cwd="node" respawn="true" output="screen">
+        <param name="rgbd_rate"  type = "double" value="2"/>
+    </node>
+</launch>

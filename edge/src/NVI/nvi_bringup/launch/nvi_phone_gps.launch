@@ -1,0 +1,4 @@
+<launch>
+    <remap from="/phone_gps/receiver_lla" to="/ublox_driver/receiver_lla" />
+    <include file="$(find nvi_phone_gps)/launch/phone_gps.launch" />
+</launch>

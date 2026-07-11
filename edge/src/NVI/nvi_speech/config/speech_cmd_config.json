@@ -1,0 +1,26 @@
+[
+    {
+        "cmd": "start_record",
+        "cmd_zh": "开始录制"
+    },
+    {
+        "cmd": "stop_record",
+        "cmd_zh": "停止录制"
+    },
+    {
+        "cmd": "start_system",
+        "cmd_zh": "开启系统"
+    },
+    {
+        "cmd": "close_system",
+        "cmd_zh": "关闭系统"
+    },
+    {
+        "cmd": "start_local_planning",
+        "cmd_zh": "开启局部导航"
+    },
+    {
+        "cmd": "close_local_planning",
+        "cmd_zh": "关闭局部导航"
+    }
+]

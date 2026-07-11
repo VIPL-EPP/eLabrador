@@ -1,0 +1,25 @@
+camera:
+  fx: 386.854
+  fy: 385.786
+  cx: 323.006
+  cy: 241.577
+
+  width: 640
+  height: 480
+
+lang: ch # ch默认是中英文
+use_gpu: False # 是否使用gpu
+debug: False # 是否开启paddleocr的调试输出
+compressed_image: True # 是否使用压缩图像
+color_image_topic: /camera/rgb/image_raw # 彩色图像话题
+depth_image_topic: /camera/depth/image_raw # 深度图像话题
+img_frame_id: "camera_link"
+world_frame_id: "world" # 目标坐标系（world是voi的全局坐标系）
+ocr_image_publish_topic: False #/camera/color/ocr_image # 发布的图像话题，设置为None/False则不发布，用于debug
+publish_topic: /ocr # 发布的识别结果话题
+publish_frequency: detected_only # 发布频率，detected_only表示只有检测到目标时才发布，all表示每次都发布
+
+
+switch_config:
+  topic_name: /global_planning/status
+  start_string: arrived

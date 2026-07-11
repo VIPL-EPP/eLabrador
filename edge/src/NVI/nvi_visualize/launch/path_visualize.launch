@@ -1,0 +1,7 @@
+<launch>
+<!-- output="log|screen" -->
+    <node pkg="nvi_visualize" name="nvi_path_visualize" type="path_visualize_node.py" cwd="node" respawn="false" output="screen" >
+        <rosparam param="gps_topics">/ublox_driver/receiver_lla</rosparam>
+        <rosparam param="vio_topic">/vins_estimator/odometry</rosparam>
+    </node>
+</launch>

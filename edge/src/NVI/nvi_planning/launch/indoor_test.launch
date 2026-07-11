@@ -1,0 +1,6 @@
+<launch>
+    <!-- <node pkg="nvi_planning" name="map_publisher" type="map_pub_node.py" cwd="node" respawn="true" output="screen">
+    </node> -->
+    <node pkg="nvi_planning" name="nvi_local_path_follower" type="toy_test.py" cwd="node" respawn="true" output="screen">
+    </node>
+</launch>

@@ -1,0 +1,6 @@
+<launch>
+<!-- output="log|screen" -->
+    <node pkg="nvi_voice" name="voice" type="nvi_tfvoice_node.py" cwd="node" respawn="true" output="screen" >
+        <rosparam file="$(find nvi_voice)/config/voice_params.yaml" command="load" />
+    </node>
+</launch>

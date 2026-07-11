@@ -1,0 +1,28 @@
+<launch>
+    <!-- output="log|screen" -->
+    <arg name="device_bt" default="true"/>
+    <arg name="device_ble" default="false"/>
+    <arg name="device_serial" default="false"/>
+    <arg name="bluetooth_mac_address" default="$(optenv BELT_BLUETOOTH_MAC '')"/>
+    <arg name="serial_port" default="$(optenv NVI_BELT_PORT /dev/ttyBelt)"/>
+    <arg name="serial_baudrate" default="9600"/>
+    <!-- traditional bluetooth device -->
+    <group if="$(arg device_bt)"> 
+        <node pkg="nvi_belt" name="belt" type="nvi_belt_bt_node.py" cwd="node" respawn="true" output="screen">
+            <param name="bluetooth_mac_address" type="str" value="$(arg bluetooth_mac_address)"/>
+        </node>
+    </group>
+    <!-- low energy bluetooth device -->
+    <group if="$(arg device_ble)"> 
+        <node pkg="nvi_belt" name="belt" type="nvi_belt_node.py" cwd="node" respawn="true" output="screen">
+            <param name="bluetooth_mac_address" type="str" value="$(arg bluetooth_mac_address)"/>
+        </node>
+    </group>
+    <!-- serial device -->
+    <group if="$(arg device_serial)"> 
+        <node pkg="nvi_belt" name="belt_serial" type="nvi_belt_serial_node" cwd="node" respawn="true" output="screen">
+            <param name="serialPort" type="str" value="$(arg serial_port)"/>
+            <param name="serialBaudrate" type="int" value="$(arg serial_baudrate)"/>
+        </node>
+    </group>
+</launch>

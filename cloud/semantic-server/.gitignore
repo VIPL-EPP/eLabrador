@@ -1,0 +1,13 @@
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.exif
+.env
+.env.*
+!.env.example
+/models
+*.pyc
+*.tar
+*.log
+/uploaded_files

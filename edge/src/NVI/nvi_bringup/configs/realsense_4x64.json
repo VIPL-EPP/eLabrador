@@ -1,0 +1,8 @@
+{
+    "parameters": {
+        "controls-color-autoexposure-auto": "False",
+        "controls-color-autoexposure-manual": "4",
+        "controls-color-gain": "64"
+    },
+    "schema version": 1
+}

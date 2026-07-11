@@ -1,0 +1,6 @@
+<launch>
+    <rosparam file="$(find semantic_slam)/params/octomap_generator.yaml" command="load"/>
+    <node pkg="octomap_generator" type="octomap_generator" name="octomap_generator" output="screen">
+        <env name="OMP_NUM_THREADS" value="2" />
+    </node>
+</launch>

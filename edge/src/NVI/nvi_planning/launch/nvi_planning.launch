@@ -1,0 +1,4 @@
+<launch>
+    <include file="$(find nvi_planning)/launch/global_planning.launch" />
+    <include file="$(find nvi_planning)/launch/local_planning.launch" />
+</launch>

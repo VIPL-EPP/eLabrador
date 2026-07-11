@@ -1,0 +1,3 @@
+<launch>
+    <include file="$(find nvi_planning)/launch/local_path_following.launch" />
+</launch>

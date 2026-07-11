@@ -1,0 +1,15 @@
+[
+  {
+    "name": "demo_route",
+    "start": {
+      "latitude": 0.0,
+      "longitude": 0.0
+    },
+    "end": {
+      "latitude": 0.0001,
+      "longitude": 0.0001
+    },
+    "landmark": "demo_landmark",
+    "destination": "demo_destination"
+  }
+]

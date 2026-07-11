@@ -1,0 +1,7 @@
+brightness_threshold: 250
+area_threshould: 6000
+scale_factor: 1.0
+compressed_image: False # 是否使用压缩图像
+color_image_topic: /camera/rgb/image_raw # 彩色图像话题
+depth_image_topic: /camera/depth/image_raw # 深度图像话题
+image_publish_topic: /camera/color/auto_exposure_roi_image # 发布的图像话题，设置为None/False则不发布，用于debug

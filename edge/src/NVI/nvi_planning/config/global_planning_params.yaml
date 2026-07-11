@@ -1,0 +1,5 @@
+delta_time: 5
+turn_dis: 25
+reset_dis: 30
+point_bufeer_size: 100
+path_visulize: False

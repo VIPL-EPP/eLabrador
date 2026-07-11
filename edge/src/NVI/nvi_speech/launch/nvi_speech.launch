@@ -1,0 +1,6 @@
+<launch>
+<!-- output="log|screen" -->
+    <node pkg="nvi_speech" name="speech" type="nvi_speech_node.py" cwd="node" respawn="true" output="screen" >
+        <!-- <rosparam file="$(find nvi_speech)/config/voice_params.yaml" command="load" /> -->
+    </node>
+</launch>

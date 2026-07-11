@@ -1,0 +1,20 @@
+<launch>
+    <arg name="record_path" default="test.bag"/>
+    <node pkg="rosbag" name="data_record" type="record" 
+        args="/tf /tf_static /camera/imu 
+        /camera/rgb/camera_info /camera/rgb/image_raw  /camera/rgb/image_raw/compressed
+        /camera/depth/camera_info /camera/depth/image_raw /camera/rgb/depth/compressed
+        /camera/infra1/camera_info /camera/infra1/image_rect_raw
+        /camera/infra2/camera_info /camera/infra2/image_rect_raw
+        /ublox_driver/receiver_lla
+        /vins_estimator/odometry /vins_estimator/path
+        /semantic_pcl/semantic_image /octomap_full
+        /semantic_pcl/traffic
+        
+        -O ../Datasets/$(arg record_path)" />
+</launch>
+
+        <!-- /global_planning/status /global_planning/target
+        /local_planning/belt /local_planning/objects /local_planning/target
+        /management/command
+        /semanticmap_full /prmap_full -->

@@ -1,0 +1,4 @@
+<launch>
+    <node pkg="nvi_servo" name="nvi_servo" type="nvi_servo_node.py" cwd="node" respawn="true" output="screen">
+    </node>
+</launch>

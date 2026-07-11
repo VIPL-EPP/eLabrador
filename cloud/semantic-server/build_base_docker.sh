@@ -1,0 +1,1 @@
+docker build -t nvi_server_base:$1 -t nvi_server_base:latest BaseDocker

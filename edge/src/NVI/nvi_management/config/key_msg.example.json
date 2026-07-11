@@ -1,0 +1,48 @@
+{
+  "sensor": [
+    {
+      "module_type": "sensor",
+      "msg": "/camera/color/image_raw",
+      "msg_package": "sensor_msgs.msg",
+      "msg_type": "Image",
+      "msg_name_zh": "color_image"
+    },
+    {
+      "module_type": "sensor",
+      "msg": "/camera/depth/image_rect_raw",
+      "msg_package": "sensor_msgs.msg",
+      "msg_type": "Image",
+      "msg_name_zh": "depth_image"
+    },
+    {
+      "module_type": "sensor",
+      "msg": "/ublox_driver/receiver_lla",
+      "msg_package": "sensor_msgs.msg",
+      "msg_type": "NavSatFix",
+      "msg_name_zh": "gnss_fix"
+    }
+  ],
+  "function": [
+    {
+      "module_type": "function",
+      "msg": "/vins_estimator/odometry",
+      "msg_package": "nav_msgs.msg",
+      "msg_type": "Odometry",
+      "msg_name_zh": "vio_odometry"
+    },
+    {
+      "module_type": "function",
+      "msg": "/belt/heartbeat",
+      "msg_package": "std_msgs.msg",
+      "msg_type": "Empty",
+      "msg_name_zh": "belt_heartbeat"
+    },
+    {
+      "module_type": "function",
+      "msg": "/speech/heartbeat",
+      "msg_package": "std_msgs.msg",
+      "msg_type": "Empty",
+      "msg_name_zh": "speech_heartbeat"
+    }
+  ]
+}

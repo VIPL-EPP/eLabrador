@@ -1,0 +1,19 @@
+version: "3.8"
+services:
+        server:
+                image: "nvi_server_base:latest"
+                user: "${NVI_CONTAINER_USER:?Set NVI_CONTAINER_USER in .env}"
+                restart: "always"
+                ports:
+                        - "${NVI_HOST_PORT:?Set NVI_HOST_PORT in .env}:80"
+                volumes:
+                        - "./:/opt/nvi_server"
+                deploy:
+                        resources:
+                                reservations:
+                                        devices:
+                                                - device_ids: ["${NVI_GPU_DEVICE_ID:?Set NVI_GPU_DEVICE_ID in .env}"]
+                                                  capabilities: ["gpu"]
+                                                  driver: "nvidia"
+                container_name: "${NVI_CONTAINER_NAME:?Set NVI_CONTAINER_NAME in .env}"
+                command: bash docker_exec.sh

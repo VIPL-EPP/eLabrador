@@ -1,0 +1,3 @@
+<launch>
+    <include file="$(find vins_estimator)/launch/realsense_color.launch" />
+</launch>

@@ -1,0 +1,109 @@
+# NVI open-source repository guardrails
+
+# ROS/catkin build products
+build/
+devel/
+install/
+logs/
+.catkin_workspace
+catkin_make.cache
+CTestTestfile.cmake
+cmake_install.cmake
+Makefile
+*.make
+*.cmake
+CMakeLists.txt
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local IDE and OS files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local agent planning notes
+docs/superpowers/
+
+# Secrets and local runtime configuration
+.env
+.env.*
+!.env.example
+route_config.json
+key_msg.json
+key_msg_*.json
+*.pem
+*.key
+*.crt
+*.p12
+*.jsonl
+
+# ROS bags, datasets, logs, and generated media
+data/
+models/
+model/
+output/
+outputs/
+*.bag
+*.bag.active
+*.db3
+*.mcap
+*.pcd
+*.ply
+*.pkl
+*.npy
+*.npz
+*.jpg
+*.jpeg
+*.png
+*.mp4
+*.avi
+*.mov
+*.apk
+*.whl
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+
+# Tracked documentation images
+!docs/assets/*.png
+
+# AI model weights and checkpoints
+*.pt
+*.h5
+*.pth
+*.onnx
+*.pb
+*.tflite
+*.engine
+*.weights
+*weights*
+checkpoints/
+model_zoo/
+pretrained/
+
+# Project-specific generated/test assets
+CATKIN_IGNORE
+semantic_slam/semantic_cloud/src/blind_guide_modules/res/*
+nvi_interaction/imgs/
+code/NVI/test.png
+
+# Other temporary or generated files
+*副本*
+*.bak
+*.backup
+*.tmp
+*.log
+
+refs/
+.codex/
+.agents/

@@ -1,0 +1,6 @@
+<launch>
+    <!-- output="log|screen" -->
+    <node pkg="nvi_planning" name="local_planning" type="local_planning_node.py" cwd="node" respawn="true" output="screen">
+        <!-- <rosparam file="$(find nvi_planning)/config/global_planning_params.yaml" command="load" /> -->
+    </node>
+</launch>

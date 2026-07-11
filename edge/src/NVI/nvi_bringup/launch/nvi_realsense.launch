@@ -1,0 +1,54 @@
+<launch>
+    <remap from="/camera/aligned_depth_to_color/image_raw" to="/camera/depth/image_raw" />
+    <remap from="/camera/color/image_raw" to="/camera/rgb/image_raw" />
+    <remap from="/camera/color/camera_info" to="/camera/rgb/camera_info" />
+    <remap from="/camera/color/metadata" to="/camera/rgb/metadata" />
+    <include file="$(find realsense2_camera)/launch/rs_camera.launch">
+        <arg name="json_file_path"      value="$(find nvi_bringup)/configs/realsense_auto.json" />
+        <arg name="color_width"     value="640"/>
+        <arg name="color_height"    value="480"/>
+        
+        <arg name="depth_width"     value="640"/>
+        <arg name="depth_height"    value="480"/>
+
+        <arg name="infra_width"     value="640"/>
+        <arg name="infra_height"    value="480"/>
+        
+        <arg name="enable_infra"    value="true"/>
+        <arg name="enable_infra1"   value="true"/>
+        <arg name="enable_infra2"   value="true"/>
+        
+        <arg name="color_fps"       value="30"/>
+        <arg name="depth_fps"       value="30"/>
+        <arg name="gyro_fps"        value="200"/>
+        <arg name="accel_fps"       value="200"/>   
+        <arg name="enable_gyro"     value="true"/>
+        <arg name="enable_accel"    value="true"/>
+
+        <arg name="enable_sync"     value="true"/>
+        <arg name="align_depth"     value="true"/>
+
+        <arg name="unite_imu_method" value="linear_interpolation"/>
+    </include>
+    <arg name="emitter_enable"  value="false"/>  
+    <!-- rosparam set /camera/stereo_module/emitter_enabled false -->
+    <rosparam>
+        /camera/stereo_module/emitter_enabled: 0
+    </rosparam>
+    <rosparam if="$(arg emitter_enable)">
+        /camera/stereo_module/emitter_enabled: 2
+    </rosparam>
+
+    <rosparam>
+      /camera/motion_module/global_time_enabled: true
+      /camera/l500_depth_sensor/global_time_enabled: true
+      /camera/rgb_camera/global_time_enabled: true
+    </rosparam>
+
+    <!-- <rosparam>
+        /camera/rgb_camera/auto_exposure_roi/top: 0
+        /camera/rgb_camera/auto_exposure_roi/bottom: 100
+    </rosparam> -->
+
+    
+</launch>

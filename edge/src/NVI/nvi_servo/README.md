@@ -1,0 +1,1 @@
+pip install jieba gensim distance scikit-learn

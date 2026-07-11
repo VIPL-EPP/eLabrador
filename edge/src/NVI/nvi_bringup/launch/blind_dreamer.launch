@@ -1,0 +1,47 @@
+<launch>
+    <include file="$(find nvi_management)/launch/nvi_management.launch" />
+    <include file="$(find nvi_bringup)/launch/nvi_realsense.launch" /> 
+    <include file="$(find nvi_bringup)/launch/nvi_phone_gps.launch" />
+    <!-- <include file="$(find nvi_bringup)/launch/nvi_vio.launch" /> -->
+    <include file="$(find nvi_planning)/launch/calibration.launch" />
+    <!-- 底层 -->
+    <!-- interaction -->
+    <!-- <include file="$(find nvi_belt)/launch/nvi_belt.launch" /> -->
+    <include file="$(find nvi_voice)/launch/nvi_voice.launch" />
+    <include file="$(find nvi_speech)/launch/nvi_speech.launch" />
+    
+    <!-- navigation -->
+    <include file="$(find nvi_planning)/launch/global_planning.launch" />
+    <include file="$(find nvi_bringup)/launch/nvi_semantic.launch" />
+    <include file="$(find nvi_planning)/launch/local_path_searching.launch" />
+    <include file="$(find nvi_planning)/launch/outdoor_test.launch" />
+    <include file="$(find nvi_servo)/launch/nvi_servo.launch" />
+    <include file="$(find nvi_ocr)/launch/nvi_ocr.launch" />
+    <!-- <include file="$(find nvi_planning)/launch/local_path_following.launch" /> -->
+    <arg name="record_path" default="test_013.bag"/>
+    <node pkg="rosbag" name="data_record" type="record" 
+        args="/tf /tf_static /camera/imu 
+        /camera/rgb/camera_info /camera/rgb/image_raw  /camera/rgb/image_raw/compressed
+        /camera/depth/camera_info /camera/depth/image_raw /camera/rgb/depth/compressed
+        /camera/infra1/camera_info /camera/infra1/image_rect_raw
+        /camera/infra2/camera_info /camera/infra2/image_rect_raw
+        /ublox_driver/receiver_lla
+        /mobile/orientation
+        /vins_estimator/odometry /vins_estimator/path
+        /global_planning/target 
+        /global_planning/roads /gps_vio_calib /gps_vio_init_lla
+        /local_planning/belt /local_planning/objects /local_planning/target /local_planning/cost_map_ego
+        /management/command /voice/nvi_voice_topic /voice/system /voice/filter
+        /ocr
+        /belt/actual_vibration
+        /prmap_full /semanticmap_full /semanticmap_full/objects /semanticmap_full/objects/objects
+        -O ../Datasets/$(arg record_path)" />
+    <!-- <node pkg="rosbag" name="data_record" type="record" 
+        args="/tf_static /camera/imu 
+        /camera/rgb/camera_info /camera/rgb/image_raw  /camera/rgb/image_raw/compressed
+        /camera/depth/camera_info /camera/depth/image_raw
+        /ublox_driver/receiver_lla
+        /prmap_full /semanticmap_full /semanticmap_full/objects /semanticmap_full/objects/objects
+        -O ../Datasets/$(arg record_path)" /> -->
+
+</launch>

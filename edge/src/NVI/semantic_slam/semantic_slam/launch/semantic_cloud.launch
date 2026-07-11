@@ -1,0 +1,6 @@
+<launch>
+    <rosparam file="$(find semantic_slam)/params/semantic_cloud.yaml" command="load"/>
+    <node pkg="semantic_cloud" type="semantic_cloud_python3.py" name="semantic_cloud" output="screen">
+        <env name="OMP_NUM_THREADS" value="1" /> 
+    </node>
+</launch>

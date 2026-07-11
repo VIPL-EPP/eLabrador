@@ -1,0 +1,4 @@
+<launch>
+    <include file="$(find nvi_bringup)/launch/nvi_realsense.launch" />
+    <include file="$(find nvi_bringup)/launch/nvi_phone_gps.launch" />
+</launch>

@@ -1,0 +1,16 @@
+octomap:
+    pointcloud_topic: "/semantic_pcl/semantic_pcl"
+    tree_type: 1
+    world_frame_id: "world"
+    resolution: 0.2
+    max_range: 10.0
+    global_crop: true # crop the octomap with max_range
+    raycast_range: 10.0 # points in this range will be erased by raycasting
+    clamping_thres_min: 0.12
+    clamping_thres_max: 0.97
+    occupancy_thres: 0.5
+    prob_hit: 0.8
+    prob_miss: 0.2
+    valid_min: 0.2 # points in this range will be used as endpoints of raycasting
+    valid_max: 66 # points in this range will be used as endpoints of raycasting
+    # save_path : "data/octomaps/map.bt"

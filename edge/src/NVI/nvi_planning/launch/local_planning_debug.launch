@@ -1,0 +1,5 @@
+<launch>
+    <!-- output="log|screen" -->
+    <node pkg="nvi_planning" name="path_searching" type="local_path_searching_node.py" cwd="node" respawn="true" output="screen" />
+    <node pkg="nvi_planning" name="path_folllowing" type="local_path_folllowing_node.py" cwd="node" respawn="true" output="screen" />
+</launch>

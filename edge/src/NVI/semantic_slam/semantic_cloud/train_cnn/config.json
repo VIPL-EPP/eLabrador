@@ -1,0 +1,41 @@
+{
+  "pascal":
+  {
+    "data_path": "data/VOC/VOCdevkit/VOC2012"
+  },
+
+  "sbd":
+  {
+    "data_path": "data/VOC/benchmark_RELEASE/"
+  },
+
+  "camvid":
+  {
+    "data_path": "data/CamVid/"
+  },
+
+  "ade20k":
+  {
+    "data_path": "data/ADE20K/"
+  },
+
+  "mit_sceneparsing_benchmark":
+  {
+    "data_path": "data/ADEChallengeData2016/"
+  },
+
+  "nyuv2":
+  {
+    "data_path": "data/NYUv2/"
+  },
+
+  "sunrgbd":
+  {
+    "data_path": "data/SUNRGBD/"
+  },
+
+  "cityscapes":
+  {
+    "data_path": "data/cityscapes/"
+  }
+}

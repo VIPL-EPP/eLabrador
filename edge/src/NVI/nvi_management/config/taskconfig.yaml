@@ -1,0 +1,29 @@
+task_config_sets:
+  - name: "naviagtion"
+    module:
+      - name: "camera"
+        param: {}
+      - name: "gps"
+        param: {}
+      - name: "magnetometer"
+        param: {}
+      - name: "vio"
+        param: {}
+      - name: "semantic"
+        param: {}
+      - name: "planning"
+        param: {}
+      - name: "voice"
+        param: {}
+  - name: "observation"
+    module:
+      - name: "camera"
+        param: {}
+      - name: "semantic"
+        param: {}
+      - name: "voice"
+        param: {}
+
+      
+
+

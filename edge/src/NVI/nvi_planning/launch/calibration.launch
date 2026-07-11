@@ -1,0 +1,11 @@
+<launch>
+    <node pkg="nvi_planning" name="mobile_orientation_receiver" type="mobile_orientation_receiver_node.py" cwd="node" respawn="true" output="screen">
+        <!-- Set this to the mobile device IP to filter other UDP senders -->
+        <!-- <param name="allowed_sender_ip" value="192.168.0.109" /> -->
+        <!-- <param name="udp_port" value="8080" />
+        <param name="input_in_degrees" value="true" />
+        <param name="out_topic" value="/mobile/orientation" /> -->
+    </node>
+    
+    <node pkg="nvi_planning" name="calibration" type="calibration.py" cwd="node" respawn="true" output="screen"/>
+</launch>

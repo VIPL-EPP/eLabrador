@@ -1,0 +1,9 @@
+<launch>
+    <env name="OMP_NUM_THREADS" value="1" /> 
+    <remap from="/camera/rgb/image_raw" to="/camera/rgb/image_raw/compressed" />
+    <remap from="/camera/depth/image_raw" to="/camera/depth/image_raw/compressed" />
+    <include file="$(find semantic_slam)/launch/semantic_mapping.launch" />
+    <rosparam>
+      /semantic_pcl/rgbd_topic: "/camera/rgbd/image_raw/compressed"
+    </rosparam>
+</launch>

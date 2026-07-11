@@ -1,0 +1,6 @@
+<launch>
+<!-- output="log|screen" -->
+    <node pkg="nvi_auto_exposure" name="nvi_auto_exposure" type="nvi_auto_exposure_node.py" cwd="node" respawn="true" output="screen" >
+        <rosparam file="$(find nvi_auto_exposure)/config/auto_exposure_params.yaml" command="load" />
+    </node>
+</launch>

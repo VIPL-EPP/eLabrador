@@ -1,0 +1,20 @@
+<launch>
+    <include file="$(find nvi_management)/launch/nvi_management.launch" />
+    <include file="$(find nvi_bringup)/launch/nvi_realsense.launch" /> 
+    <include file="$(find nvi_bringup)/launch/nvi_phone_gps.launch" />
+    <include file="$(find nvi_bringup)/launch/nvi_vio.launch" />
+    <include file="$(find nvi_planning)/launch/calibration.launch" />
+
+    <!-- interaction -->
+    <!-- <include file="$(find nvi_belt)/launch/nvi_belt.launch" /> -->
+    <!-- <include file="$(find nvi_voice)/launch/nvi_voice.launch" /> -->
+    <include file="$(find nvi_speech)/launch/nvi_speech.launch" />
+    
+    <!-- navigation -->
+    <include file="$(find nvi_servo)/launch/nvi_servo.launch" />
+    <!-- <include file="$(find nvi_bringup)/launch/nvi_semantic.launch" /> -->
+    <!-- <include file="$(find nvi_ocr)/launch/nvi_ocr.launch" /> -->
+    <!-- <include file="$(find nvi_planning)/launch/global_planning.launch" />
+    <include file="$(find nvi_planning)/launch/local_path_searching.launch" />
+    <include file="$(find nvi_planning)/launch/local_path_following.launch" /> -->
+</launch>

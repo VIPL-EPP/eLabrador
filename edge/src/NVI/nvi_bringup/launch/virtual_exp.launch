@@ -1,0 +1,14 @@
+<launch>
+
+    <arg name="map_name" default="map_name"/>
+    <arg name="map_path" default="$(find nvi_bringup)/maps/image_0.yaml"/>
+
+    <node name="map_server" pkg="map_server" type="map_server"
+        args="$(arg map_path)" output="screen" >
+    <param name="frame_id" value="map"/>
+    </node>
+    <include file="$(find nvi_bringup)/launch/indoor_test.launch">
+        <arg name="current_map" value="$(arg map_name)"/>
+    </include>
+
+</launch>
