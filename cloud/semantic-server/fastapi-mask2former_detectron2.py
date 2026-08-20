@@ -36,6 +36,8 @@ console_handler = logging.StreamHandler()
 console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 
+torch.set_float32_matmul_precision(Config.float32_matmul_precision)
+
 _Executor = ThreadPoolExecutor(max_workers=Config.num_thread)
 
 
