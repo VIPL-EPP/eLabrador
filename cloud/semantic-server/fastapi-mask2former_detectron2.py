@@ -3,7 +3,7 @@ import torch
 import asyncio
 import os, time
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi import Body, File, UploadFile, Response
+from fastapi import Body, File, HTTPException, UploadFile, Response
 from concurrent.futures import ThreadPoolExecutor
 from queue import Queue
 import io
@@ -66,41 +66,58 @@ class MultiScalePredictor(DefaultPredictor):
                 the output of the model for one image only.
                 See :doc:`/tutorials/models` for details about the format.
         """
+        return self.predict_batch([original_image])[0]
+
+    def predict_batch(self, original_images):
+        """Run the TTA sweep for several images in one pass per scale.
+
+        Each scale issues about 1,700 kernel launches regardless of how many images
+        it carries, so folding concurrent requests into one batch amortizes the
+        launch cost that dominates this model on an H100.
+
+        Args:
+            original_images (list[np.ndarray]): images of shape (H, W, C) in BGR order.
+
+        Returns:
+            list[torch.Tensor]: the merged probability map per input image.
+        """
         with torch.no_grad():  # https://github.com/sphinx-doc/sphinx/issues/4258
             # Apply pre-processing to image.
-            rgb_original_image = original_image[:, :, ::-1]
-            if self.input_format == "RGB":
-                # whether the model expects BGR inputs or RGB
-                original_image = rgb_original_image
-            height, width = original_image.shape[:2]
+            images = []
+            for original_image in original_images:
+                rgb_original_image = original_image[:, :, ::-1]
+                if self.input_format == "RGB":
+                    # whether the model expects BGR inputs or RGB
+                    original_image = rgb_original_image
+                images.append(original_image)
+            sizes = [image.shape[:2] for image in images]
             
             tta = self.cfg.TEST.AUG.ENABLED
             flip = self.cfg.TEST.AUG.FLIP
             short_edges = self.cfg.TEST.AUG.MIN_SIZES if tta else [self.cfg.INPUT.MIN_SIZE_TEST]
             max_edge = self.cfg.TEST.AUG.MAX_SIZE if tta else self.cfg.INPUT.MAX_SIZE_TEST
 
-            print("short edges:", short_edges)
-            
-            predictions = list()
+            views_per_image = 2 if (tta and flip) else 1
+            predictions = [list() for _ in images]
             for short_edge in short_edges:
                 aug = T.ResizeShortestEdge(
                     [short_edge, short_edge], max_edge
                 )
-                image = aug.get_transform(original_image).apply_image(original_image).astype("float32").transpose(2, 0, 1)
-                image = torch.as_tensor(image, device=self.cfg.MODEL.DEVICE)
+                inputs = list()
+                for original_image, (height, width) in zip(images, sizes):
+                    image = aug.get_transform(original_image).apply_image(original_image).astype("float32").transpose(2, 0, 1)
+                    image = torch.as_tensor(image, device=self.cfg.MODEL.DEVICE)
+                    inputs.append({"image": image, "height": height, "width": width})
+                    if views_per_image == 2:
+                        inputs.append({"image": torch.flip(image, dims=[2]), "height": height, "width": width})
 
-                inputs = [{"image": image, "height": height, "width": width}]
-
-                if tta and flip:
-                    image_f = torch.flip(image, dims=[2])
-                    inputs.append({"image": image_f, "height": height, "width": width})
-                    results = self.model(inputs)
-                    assert len(results[-1]['sem_seg'].shape) == 3
-                    results[-1]['sem_seg'] = torch.flip(results[-1]['sem_seg'], dims=[2])
-                else:
-                    results = self.model(inputs)
-
-                predictions.extend(results)
+                results = self.model(inputs)
+                for index in range(len(images)):
+                    base = index * views_per_image
+                    predictions[index].append(results[base]['sem_seg'])
+                    if views_per_image == 2:
+                        assert len(results[base + 1]['sem_seg'].shape) == 3
+                        predictions[index].append(torch.flip(results[base + 1]['sem_seg'], dims=[2]))
             
             # inputs = list()
             # for short_edge in short_edges:
@@ -131,17 +148,17 @@ class MultiScalePredictor(DefaultPredictor):
             # probs = probs / len(predictions)
             
             # average merge
-            probs = torch.stack([p['sem_seg'] for p in predictions], dim=0).mean(dim=0)
+            merged = [torch.stack(views, dim=0).mean(dim=0) for views in predictions]
             
             if self.with_crf:
                 # 1/4 resolution
                 # crf_image = torch.nn.functional.interpolate(crf_image, scale_factor=0.25, mode='bilinear', align_corners=False)
                 # probs = torch.nn.functional.interpolate(probs, scale_factor=0.25, mode='bilinear', align_corners=False)
-                probs = self.crf(probs, rgb_original_image)
+                merged = [self.crf(probs, image[:, :, ::-1]) for probs, image in zip(merged, images)]
                 # height, width = rgb_original_image.shape[:2]
                 # probs = torch.nn.functional.interpolate(probs.unsqueeze(0), size=(height, width), mode='bilinear', align_corners=False).squeeze(0)
             
-            return probs
+            return merged
 
 class Mask2Former:
     def __init__(self, device='cpu', config_file=None) -> None:
@@ -176,32 +193,49 @@ class Mask2Former:
         conf, mask = torch.max(probs, dim=0)
         return mask, conf
     
-    @torch.no_grad()
-    def __call__(self, image: PIL.Image.Image, road_mask: Union[np.ndarray, torch.Tensor] = None,
-                 return_probs: bool = False) -> Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]:
-        """Run inference and return only what the response carries.
+    def _finalize(self, probs, road_mask, return_probs):
+        """Turn one probability map into the arrays its response carries.
 
         The reduction and the uint8 quantization run on the GPU, so the D2H copy is
         the response payload itself instead of the full 65x480x640 float32 volume.
         """
-        if road_mask is not None:
-            if isinstance(road_mask, np.ndarray):
-                road_mask = torch.from_numpy(road_mask)
-            road_mask = road_mask.to(self.device)
-        inputs = np.array(image.convert("RGB"))[..., ::-1]
-        probs = self.predictor(inputs)
-        
         # class_queries_logits = outputs.class_queries_logits
         # masks_queries_logits = outputs.masks_queries_logits
         # you can pass them to processor for postprocessing
         if return_probs:
             return _quantize_uint8(probs)
         if road_mask is not None:
-            mask, conf = self._post_process_road_mask(probs, road_mask)
+            if isinstance(road_mask, np.ndarray):
+                road_mask = torch.from_numpy(road_mask)
+            mask, conf = self._post_process_road_mask(probs, road_mask.to(self.device))
         else:
             mask = torch.argmax(probs, dim=0)
             conf = probs.amax(dim=0)
         return mask.to(torch.uint8).cpu().numpy(), _quantize_uint8(conf)
+
+    @torch.no_grad()
+    def predict_batch(self, images: List[PIL.Image.Image], road_masks: list = None,
+                      return_probs_flags: list = None) -> list:
+        """Run one batched inference pass and finalize each request separately.
+
+        Only the model pass is shared. Road-mask weighting and the choice between
+        mask/confidence and quantized probabilities stay per request, so requests
+        with different options can share a batch.
+        """
+        if road_masks is None:
+            road_masks = [None] * len(images)
+        if return_probs_flags is None:
+            return_probs_flags = [False] * len(images)
+        inputs = [np.array(image.convert("RGB"))[..., ::-1] for image in images]
+        probs_batch = self.predictor.predict_batch(inputs)
+        return [
+            self._finalize(probs, road_mask, return_probs)
+            for probs, road_mask, return_probs in zip(probs_batch, road_masks, return_probs_flags)
+        ]
+
+    def __call__(self, image: PIL.Image.Image, road_mask: Union[np.ndarray, torch.Tensor] = None,
+                 return_probs: bool = False) -> Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]:
+        return self.predict_batch([image], [road_mask], [return_probs])[0]
 
 
 _Resources = Queue()
@@ -215,25 +249,113 @@ def set_thread_number(num):
     while _Resources.qsize() < num:
         _Resources.put((torch.cuda.Stream(), Mask2Former(Config.device, Config.config_file)))
 
-def thread_call(image: Union[PIL.Image.Image, np.ndarray], road_mask: np.ndarray = None,
-                return_probs: bool = False) -> np.ndarray:
+def batch_call(items: List[Tuple]) -> list:
+    """Run one batched inference pass for a list of (image, road_mask, return_probs)."""
     global _Resources
     cuda_stream, model = _Resources.get()
     try:
         with torch.cuda.stream(cuda_stream):
-            import time
             start_time = time.time()
-            result = model(image, road_mask, return_probs)
-            end_time = time.time()
-            logger.info(f"Time elapsed: {end_time - start_time}")
+            results = model.predict_batch(
+                [item[0] for item in items],
+                [item[1] for item in items],
+                [item[2] for item in items],
+            )
+            elapsed = time.time() - start_time
+            logger.info(f"Time elapsed: {elapsed} for batch of {len(items)} ({elapsed / len(items)} per request)")
     except Exception as e:
         _Resources.put((cuda_stream, model))
         logger.error("Execution Error: {} \nDetailed Trace:\n{}".format(str(e), format_error(e)))
         raise e
     _Resources.put((cuda_stream, model))
-    return result
+    return results
+
+
+def thread_call(image: Union[PIL.Image.Image, np.ndarray], road_mask: np.ndarray = None,
+                return_probs: bool = False) -> np.ndarray:
+    return batch_call([(image, road_mask, return_probs)])[0]
+
+
+class QueueFull(Exception):
+    """Raised when the bounded request queue is saturated."""
+
+
+class BatchScheduler:
+    """Folds concurrent requests into one GPU batch behind a bounded queue.
+
+    A single worker thread owns the model, so requests were already serialized. The
+    scheduler takes whatever has piled up while the previous batch was running, which
+    forms batches under load without adding any wait at low load. max_wait_seconds
+    above zero additionally lingers for late arrivals.
+    """
+
+    _POLL_SECONDS = 0.001
+
+    def __init__(self, max_batch_size: int, max_wait_seconds: float, max_queue_size: int):
+        self.max_batch_size = max(1, int(max_batch_size))
+        self.max_wait_seconds = max(0.0, float(max_wait_seconds))
+        self.max_queue_size = max(0, int(max_queue_size))
+        self._queue = None
+        self._worker = None
+
+    def _ensure_started(self):
+        if self._worker is None or self._worker.done():
+            self._queue = asyncio.Queue()
+            self._worker = asyncio.get_running_loop().create_task(self._run())
+
+    async def submit(self, image, road_mask=None, return_probs=False):
+        self._ensure_started()
+        if self.max_queue_size and self._queue.qsize() >= self.max_queue_size:
+            raise QueueFull(f"request queue is full ({self.max_queue_size})")
+        future = asyncio.get_running_loop().create_future()
+        self._queue.put_nowait((image, road_mask, return_probs, future))
+        return await future
+
+    async def _collect(self):
+        batch = [await self._queue.get()]
+        if self.max_batch_size == 1:
+            return batch
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self.max_wait_seconds
+        while len(batch) < self.max_batch_size:
+            try:
+                batch.append(self._queue.get_nowait())
+                continue
+            except asyncio.QueueEmpty:
+                pass
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                break
+            await asyncio.sleep(min(remaining, self._POLL_SECONDS))
+        return batch
+
+    async def _run(self):
+        loop = asyncio.get_running_loop()
+        while True:
+            batch = await self._collect()
+            try:
+                results = await loop.run_in_executor(_Executor, batch_call, [item[:3] for item in batch])
+            except Exception as error:
+                for item in batch:
+                    if not item[3].done():
+                        item[3].set_exception(error)
+                continue
+            for item, result in zip(batch, results):
+                if not item[3].done():
+                    item[3].set_result(result)
+
+
+_Scheduler = BatchScheduler(Config.max_batch_size, Config.max_batch_wait_ms / 1000.0, Config.max_queue_size)
 
 app = FastAPI()
+
+
+async def _submit(image, road_mask=None, return_probs=False):
+    """Enqueue one request, answering 503 rather than queueing without bound."""
+    try:
+        return await _Scheduler.submit(image, road_mask, return_probs)
+    except QueueFull as error:
+        raise HTTPException(status_code=503, detail=str(error))
 
 @app.post("/predict")
 async def predict(image: UploadFile = File(...), road_mask: UploadFile = File(default=None), return_probs: bool = Body(False)):
@@ -246,10 +368,9 @@ async def predict(image: UploadFile = File(...), road_mask: UploadFile = File(de
     image = PIL.Image.open(buffer)
     print("image decode:", time.time() - last_time)
     last_time = time.time()
-    loop = asyncio.get_running_loop()
     buffer = io.BytesIO()
     if return_probs:
-        probs = await loop.run_in_executor(_Executor, thread_call, image, None, True)
+        probs = await _submit(image, None, True)
         print("model inference:", time.time() - last_time)
         last_time = time.time()
         np.savez_compressed(buffer, probs)
@@ -263,7 +384,7 @@ async def predict(image: UploadFile = File(...), road_mask: UploadFile = File(de
             road_mask = np.load(io.BytesIO(compressed_data))['arr_0']
             print("road mask decode:", time.time() - last_time)
             last_time = time.time()
-        mask, conf = await loop.run_in_executor(_Executor, thread_call, image, road_mask)
+        mask, conf = await _submit(image, road_mask)
         print("model inference:", time.time() - last_time)
         last_time = time.time()
         np.savez_compressed(buffer, mask=mask, conf=conf)
@@ -284,8 +405,7 @@ async def predict(image: UploadFile = File(...)):
     image = PIL.Image.open(buffer)
     print("image decode:", time.time() - last_time)
     last_time = time.time()
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(_Executor, thread_call, image)
+    await _submit(image)
     print("model inference:", time.time() - last_time)
     last_time = time.time()
     print("Total:",  time.time() - start_time, "Bytes:", len(buffer.getvalue()))
@@ -320,13 +440,13 @@ async def predict_ws(websocket: WebSocket):
 
             buffer = io.BytesIO()
             if 'return_probs' in npdata and npdata['return_probs']:
-                probs = await asyncio.get_event_loop().run_in_executor(_Executor, thread_call, image, None, True)
+                probs = await _Scheduler.submit(image, None, True)
                 np.savez_compressed(buffer, probs=probs)
             else:
                 road_mask = None
                 if 'road_mask' in npdata and npdata['road_mask'].shape == image.size[::-1]:
                     road_mask = npdata['road_mask']
-                mask, conf = await asyncio.get_event_loop().run_in_executor(_Executor, thread_call, image, road_mask)
+                mask, conf = await _Scheduler.submit(image, road_mask)
                 np.savez_compressed(buffer, mask=mask, conf=conf)
             await websocket.send_bytes(buffer.getvalue())
         except WebSocketDisconnect:
