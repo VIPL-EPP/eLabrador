@@ -37,6 +37,15 @@ console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 
 _Executor = ThreadPoolExecutor(max_workers=Config.num_thread)
+
+
+def _quantize_uint8(tensor: torch.Tensor) -> np.ndarray:
+    """Quantize on device, then copy back the uint8 result only.
+
+    Equivalent to the host-side ``(value * 255).astype(np.uint8)``: both truncate
+    toward zero after the same float32 multiply.
+    """
+    return (tensor * 255).to(torch.uint8).cpu().numpy()
     
                  
 class MultiScalePredictor(DefaultPredictor):
@@ -166,7 +175,13 @@ class Mask2Former:
         return mask, conf
     
     @torch.no_grad()
-    def __call__(self, image: PIL.Image.Image, road_mask: Union[np.ndarray, torch.Tensor] = None) -> np.ndarray:
+    def __call__(self, image: PIL.Image.Image, road_mask: Union[np.ndarray, torch.Tensor] = None,
+                 return_probs: bool = False) -> Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]:
+        """Run inference and return only what the response carries.
+
+        The reduction and the uint8 quantization run on the GPU, so the D2H copy is
+        the response payload itself instead of the full 65x480x640 float32 volume.
+        """
         if road_mask is not None:
             if isinstance(road_mask, np.ndarray):
                 road_mask = torch.from_numpy(road_mask)
@@ -177,12 +192,14 @@ class Mask2Former:
         # class_queries_logits = outputs.class_queries_logits
         # masks_queries_logits = outputs.masks_queries_logits
         # you can pass them to processor for postprocessing
+        if return_probs:
+            return _quantize_uint8(probs)
         if road_mask is not None:
             mask, conf = self._post_process_road_mask(probs, road_mask)
-            return mask.cpu().numpy().astype(np.uint8), conf.cpu().numpy().astype(np.float32)
         else:
             mask = torch.argmax(probs, dim=0)
-            return mask.cpu().numpy().astype(np.uint8), probs.cpu().numpy().astype(np.float32)
+            conf = probs.amax(dim=0)
+        return mask.to(torch.uint8).cpu().numpy(), _quantize_uint8(conf)
 
 
 _Resources = Queue()
@@ -196,14 +213,15 @@ def set_thread_number(num):
     while _Resources.qsize() < num:
         _Resources.put((torch.cuda.Stream(), Mask2Former(Config.device, Config.config_file)))
 
-def thread_call(image: Union[PIL.Image.Image, np.ndarray], road_mask: np.ndarray = None) -> np.ndarray:
+def thread_call(image: Union[PIL.Image.Image, np.ndarray], road_mask: np.ndarray = None,
+                return_probs: bool = False) -> np.ndarray:
     global _Resources
     cuda_stream, model = _Resources.get()
     try:
         with torch.cuda.stream(cuda_stream):
             import time
             start_time = time.time()
-            result = model(image, road_mask)
+            result = model(image, road_mask, return_probs)
             end_time = time.time()
             logger.info(f"Time elapsed: {end_time - start_time}")
     except Exception as e:
@@ -227,17 +245,11 @@ async def predict(image: UploadFile = File(...), road_mask: UploadFile = File(de
     print("image decode:", time.time() - last_time)
     last_time = time.time()
     loop = asyncio.get_running_loop()
-    if road_mask is None:
-        sem_seg, probs = await loop.run_in_executor(_Executor, thread_call, image)
-        print("model inference:", time.time() - last_time)
-        last_time = time.time()
-    elif return_probs:
-        sem_seg, probs = await loop.run_in_executor(_Executor, thread_call, image)
-        print("model inference:", time.time() - last_time)
-        last_time = time.time()
     buffer = io.BytesIO()
     if return_probs:
-        probs = (probs*255).astype(np.uint8)
+        probs = await loop.run_in_executor(_Executor, thread_call, image, None, True)
+        print("model inference:", time.time() - last_time)
+        last_time = time.time()
         np.savez_compressed(buffer, probs)
         print("probs compress:", time.time() - last_time)
         last_time = time.time()
@@ -246,18 +258,11 @@ async def predict(image: UploadFile = File(...), road_mask: UploadFile = File(de
             compressed_data = await road_mask.read()
             print("road mask read:", time.time() - last_time)
             last_time = time.time()
-            buffer = io.BytesIO(compressed_data)
-            road_mask = np.load(buffer)['arr_0']
+            road_mask = np.load(io.BytesIO(compressed_data))['arr_0']
             print("road mask decode:", time.time() - last_time)
             last_time = time.time()
-            mask, conf = await loop.run_in_executor(_Executor, thread_call, image, road_mask)
-            print("model inference:", time.time() - last_time)
-            last_time = time.time()
-        else:
-            mask = sem_seg
-            conf = np.max(probs, axis=0)
-        conf = (conf*255).astype(np.uint8)
-        print("retval prepare:", time.time() - last_time)
+        mask, conf = await loop.run_in_executor(_Executor, thread_call, image, road_mask)
+        print("model inference:", time.time() - last_time)
         last_time = time.time()
         np.savez_compressed(buffer, mask=mask, conf=conf)
         print("retval compress:", time.time() - last_time)
@@ -278,7 +283,7 @@ async def predict(image: UploadFile = File(...)):
     print("image decode:", time.time() - last_time)
     last_time = time.time()
     loop = asyncio.get_running_loop()
-    sem_seg, probs = await loop.run_in_executor(_Executor, thread_call, image)
+    await loop.run_in_executor(_Executor, thread_call, image)
     print("model inference:", time.time() - last_time)
     last_time = time.time()
     print("Total:",  time.time() - start_time, "Bytes:", len(buffer.getvalue()))
@@ -313,19 +318,13 @@ async def predict_ws(websocket: WebSocket):
 
             buffer = io.BytesIO()
             if 'return_probs' in npdata and npdata['return_probs']:
-                sem_seg, probs = await asyncio.get_event_loop().run_in_executor(_Executor, thread_call, image)
-                probs = (probs * 255).astype(np.uint8)
+                probs = await asyncio.get_event_loop().run_in_executor(_Executor, thread_call, image, None, True)
                 np.savez_compressed(buffer, probs=probs)
-            elif 'road_mask' in npdata and npdata['road_mask'].shape == image.size[::-1]:
-                road_mask = npdata['road_mask']
-                mask, conf = await asyncio.get_event_loop().run_in_executor(_Executor, thread_call, image, road_mask)
-                conf = (conf * 255).astype(np.uint8)
-                np.savez_compressed(buffer, mask=mask, conf=conf)
             else:
-                sem_seg, probs = await asyncio.get_event_loop().run_in_executor(_Executor, thread_call, image)
-                mask = sem_seg
-                conf = np.max(probs, axis=0)
-                conf = (conf * 255).astype(np.uint8)
+                road_mask = None
+                if 'road_mask' in npdata and npdata['road_mask'].shape == image.size[::-1]:
+                    road_mask = npdata['road_mask']
+                mask, conf = await asyncio.get_event_loop().run_in_executor(_Executor, thread_call, image, road_mask)
                 np.savez_compressed(buffer, mask=mask, conf=conf)
             await websocket.send_bytes(buffer.getvalue())
         except WebSocketDisconnect:
