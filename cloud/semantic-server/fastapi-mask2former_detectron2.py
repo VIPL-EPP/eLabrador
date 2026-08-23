@@ -51,9 +51,10 @@ def _quantize_uint8(tensor: torch.Tensor) -> np.ndarray:
     
                  
 class MultiScalePredictor(DefaultPredictor):
-    def __init__(self, cfg, with_crf=False):
+    def __init__(self, cfg, with_crf=False, use_cuda_graph=False):
         super().__init__(cfg)
         self.with_crf = with_crf
+        self.use_cuda_graph = use_cuda_graph
         assert not with_crf, "CRF is not supported yet"
     
     def __call__(self, original_image):
@@ -67,6 +68,49 @@ class MultiScalePredictor(DefaultPredictor):
                 See :doc:`/tutorials/models` for details about the format.
         """
         return self.predict_batch([original_image])[0]
+
+    def _get_or_capture_graph(self, inputs, short_edge, flip):
+        """Get cached graph or capture a new one for this exact input shape.
+        
+        CUDA graphs require static shapes, so we key by (scale, actual_shape, flip, batch_size).
+        """
+        if not hasattr(self, '_cuda_graphs'):
+            self._cuda_graphs = {}
+        
+        first_shape = tuple(inputs[0]["image"].shape)
+        batch_size = len(inputs)
+        key = (short_edge, first_shape, flip, batch_size)
+        
+        if key in self._cuda_graphs:
+            return self._cuda_graphs[key]
+        
+        # Build static tensors
+        static_tensors = []
+        static_inputs = []
+        for inp in inputs:
+            tensor = torch.empty_like(inp["image"])
+            static_tensors.append(tensor)
+            static_inputs.append({"image": tensor, "height": inp["height"], "width": inp["width"]})
+        
+        # Warm-up
+        for _ in range(3):
+            for static_tensor, inp in zip(static_tensors, inputs):
+                static_tensor.copy_(inp["image"])
+            _ = self.model(static_inputs)
+        torch.cuda.synchronize(self.cfg.MODEL.DEVICE)
+        
+        # Capture
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph, stream=torch.cuda.Stream(self.cfg.MODEL.DEVICE)):
+            static_outputs = self.model(static_inputs)
+        
+        graph_data = {
+            'graph': graph,
+            'static_tensors': static_tensors,
+            'static_outputs': static_outputs,
+        }
+        self._cuda_graphs[key] = graph_data
+        return graph_data
 
     def predict_batch(self, original_images):
         """Run the TTA sweep for several images in one pass per scale.
@@ -111,7 +155,14 @@ class MultiScalePredictor(DefaultPredictor):
                     if views_per_image == 2:
                         inputs.append({"image": torch.flip(image, dims=[2]), "height": height, "width": width})
 
-                results = self.model(inputs)
+                if self.use_cuda_graph:
+                    graph_data = self._get_or_capture_graph(inputs, short_edge, tta and flip)
+                    for inp, static_tensor in zip(inputs, graph_data['static_tensors']):
+                        static_tensor.copy_(inp["image"])
+                    graph_data['graph'].replay()
+                    results = [{"sem_seg": out["sem_seg"].clone()} for out in graph_data['static_outputs']]
+                else:
+                    results = self.model(inputs)
                 for index in range(len(images)):
                     base = index * views_per_image
                     predictions[index].append(results[base]['sem_seg'])
@@ -161,15 +212,16 @@ class MultiScalePredictor(DefaultPredictor):
             return merged
 
 class Mask2Former:
-    def __init__(self, device='cpu', config_file=None) -> None:
+    def __init__(self, device='cpu', config_file=None, use_cuda_graph=False) -> None:
         cfg = get_cfg()
         add_deeplab_config(cfg)
         add_maskformer2_config(cfg)
 
         cfg.merge_from_file(config_file)
         cfg.MODEL.DEVICE = device
-        self.predictor = MultiScalePredictor(cfg, with_crf=False)
+        self.predictor = MultiScalePredictor(cfg, with_crf=False, use_cuda_graph=use_cuda_graph)
         self.device = device
+        self.use_cuda_graph = use_cuda_graph
         
         self.dataset_meta = json.load(open("configs/mapillary_dataconfig.json", "r"))
         self.categories = self.dataset_meta["labels"][:-1]
@@ -240,7 +292,7 @@ class Mask2Former:
 
 _Resources = Queue()
 for _ in range(Config.num_thread):
-    _Resources.put((torch.cuda.Stream(), Mask2Former(Config.device, Config.config_file)))
+    _Resources.put((torch.cuda.Stream(), Mask2Former(Config.device, Config.config_file, Config.use_cuda_graph)))
 
 def set_thread_number(num):
     global _Executor, _Resources

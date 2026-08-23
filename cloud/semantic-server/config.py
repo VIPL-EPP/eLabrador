@@ -21,7 +21,9 @@ Mask2FormerDetectron2Config=EasyDict(
     # 组批额外等待窗口。0 表示只收走上一批执行期间堆积的请求，不给低负载加延迟。
     max_batch_wait_ms=float(os.getenv('NVI_MAX_BATCH_WAIT_MS', '0')),
     # 有界队列上限，超出返回 503。
-    max_queue_size=int(os.getenv('NVI_MAX_QUEUE_SIZE', '32'))
+    max_queue_size=int(os.getenv('NVI_MAX_QUEUE_SIZE', '32')),
+    # CUDA Graph 捕获和回放，消除 kernel 启动开销。
+    use_cuda_graph=os.getenv('NVI_USE_CUDA_GRAPH', 'true').lower() in ('true', '1', 'yes')
 )
 
 QwenVLConfig=EasyDict(
