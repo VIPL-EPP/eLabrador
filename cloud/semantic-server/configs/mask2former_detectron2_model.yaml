@@ -86,19 +86,19 @@ INPUT:
     SIZE: (1024, 1024)
     SINGLE_CATEGORY_MAX_AREA: 1.0
   COLOR_AUG_SSD: True
-  MIN_SIZE_TEST: 480
-  MAX_SIZE_TEST: 480
+  # Fixed cloud inference geometry for 640x480 camera frames: 1024x768.
+  MIN_SIZE_TEST: 768
+  MAX_SIZE_TEST: 1024
   SIZE_DIVISIBILITY: 32  # used in dataset mapper
   FORMAT: "RGB"
   DATASET_MAPPER_NAME: "mask_former_semantic"
 TEST:
   EVAL_PERIOD: 0
   AUG:
-    ENABLED: True
-    # MIN_SIZES: [480]
-    MIN_SIZES: [192, 256, 320, 384, 448, 480]
-    MAX_SIZE: 4096
-    FLIP: True
+    ENABLED: False
+    MIN_SIZES: [768]
+    MAX_SIZE: 1024
+    FLIP: False
 DATALOADER:
   FILTER_EMPTY_ANNOTATIONS: True
   NUM_WORKERS: 10

@@ -1,0 +1,135 @@
+diff --git a/mask2former/modeling/backbone/swin.py b/mask2former/modeling/backbone/swin.py
+--- a/mask2former/modeling/backbone/swin.py
++++ b/mask2former/modeling/backbone/swin.py
+@@ -136,6 +136,37 @@ def _swin_post_attention_ffn(
+     return residual + F.linear(hidden, fc2_weight, fc2_bias)
+ 
+ 
++def _swin_post_attention_ffn_bf16(
++    shortcut,
++    attention_output,
++    norm_weight,
++    norm_bias,
++    norm_eps,
++    fc1_weight_bf16,
++    fc1_bias_bf16,
++    fc2_weight_bf16,
++    fc2_bias_bf16,
++):
++    """Keep residual/norm in FP32 and run only the two MLP GEMMs in BF16."""
++    residual = shortcut + attention_output
++    normalized = F.layer_norm(
++        residual,
++        (residual.shape[-1],),
++        norm_weight,
++        norm_bias,
++        norm_eps,
++    )
++    hidden = F.gelu(
++        F.linear(
++            normalized.to(torch.bfloat16),
++            fc1_weight_bf16,
++            fc1_bias_bf16,
++        )
++    )
++    update = F.linear(hidden, fc2_weight_bf16, fc2_bias_bf16)
++    return residual + update.float()
++
++
+ _compiled_swin_post_attention_ffn_by_channels = {
+     channels: torch.compile(
+         _swin_post_attention_ffn, dynamic=False, fullgraph=True
+@@ -144,6 +175,13 @@ _compiled_swin_post_attention_ffn_by_channels = {
+     for channels in (192, 384, 768, 1536)
+ }
+ 
++_compiled_swin_post_attention_ffn_bf16_by_channels = {
++    channels: torch.compile(
++        _swin_post_attention_ffn_bf16, dynamic=False, fullgraph=True
++    )
++    for channels in (192, 384, 768, 1536)
++}
++
+ 
+ class Mlp(nn.Module):
+     """Multilayer perceptron."""
+@@ -159,6 +197,37 @@ class Mlp(nn.Module):
+         self.fc2 = nn.Linear(hidden_features, out_features)
+         self.drop = nn.Dropout(drop)
+ 
++        # These are deliberately plain attributes rather than state-dict entries.
++        # They are inference-only derived copies, built before CUDA Graph capture.
++        self._fc1_weight_bf16_cache = None
++        self._fc1_bias_bf16_cache = None
++        self._fc2_weight_bf16_cache = None
++        self._fc2_bias_bf16_cache = None
++
++    def bf16_linear_parameters(self, device):
++        if (
++            self._fc1_weight_bf16_cache is None
++            or self._fc1_weight_bf16_cache.device != device
++        ):
++            self._fc1_weight_bf16_cache = self.fc1.weight.to(torch.bfloat16)
++            self._fc1_bias_bf16_cache = (
++                self.fc1.bias.to(torch.bfloat16)
++                if self.fc1.bias is not None
++                else None
++            )
++            self._fc2_weight_bf16_cache = self.fc2.weight.to(torch.bfloat16)
++            self._fc2_bias_bf16_cache = (
++                self.fc2.bias.to(torch.bfloat16)
++                if self.fc2.bias is not None
++                else None
++            )
++        return (
++            self._fc1_weight_bf16_cache,
++            self._fc1_bias_bf16_cache,
++            self._fc2_weight_bf16_cache,
++            self._fc2_bias_bf16_cache,
++        )
++
+     def forward(self, x):
+         x = self.fc1(x)
+         x = self.act(x)
+@@ -574,9 +643,9 @@ class SwinTransformerBlock(nn.Module):
+         self.shift_size = shift_size
+         self.mlp_ratio = mlp_ratio
+         self.ffn_impl = os.getenv("NVI_SWIN_FFN_IMPL", "legacy").strip().lower()
+-        if self.ffn_impl not in ("legacy", "compiled"):
++        if self.ffn_impl not in ("legacy", "compiled", "compiled-bf16"):
+             raise ValueError(
+-                "NVI_SWIN_FFN_IMPL must be 'legacy' or 'compiled', "
++                "NVI_SWIN_FFN_IMPL must be 'legacy', 'compiled', or 'compiled-bf16', "
+                 f"got {self.ffn_impl!r}"
+             )
+         assert 0 <= self.shift_size < self.window_size, "shift_size must in 0-window_size"
+@@ -714,6 +783,29 @@ class SwinTransformerBlock(nn.Module):
+ 
+         # DropPath and Dropout are identities in eval mode, so the fixed-shape
+         # inference graph can fuse both residual adds with norm/MLP pointwise ops.
++        compiled_bf16_ffn = (
++            _compiled_swin_post_attention_ffn_bf16_by_channels.get(C)
++        )
++        if (
++            self.ffn_impl == "compiled-bf16"
++            and compiled_bf16_ffn is not None
++            and x.is_cuda
++            and not self.training
++        ):
++            fc1_weight, fc1_bias, fc2_weight, fc2_bias = (
++                self.mlp.bf16_linear_parameters(x.device)
++            )
++            return compiled_bf16_ffn(
++                shortcut,
++                x,
++                self.norm2.weight,
++                self.norm2.bias,
++                self.norm2.eps,
++                fc1_weight,
++                fc1_bias,
++                fc2_weight,
++                fc2_bias,
++            )
+         compiled_ffn = _compiled_swin_post_attention_ffn_by_channels.get(C)
+         if (
+             self.ffn_impl == "compiled"

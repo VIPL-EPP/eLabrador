@@ -1,0 +1,292 @@
+diff --git a/mask2former/modeling/transformer_decoder/mask2former_transformer_decoder.py b/mask2former/modeling/transformer_decoder/mask2former_transformer_decoder.py
+--- a/mask2former/modeling/transformer_decoder/mask2former_transformer_decoder.py
++++ b/mask2former/modeling/transformer_decoder/mask2former_transformer_decoder.py
+@@ -25,6 +25,16 @@
+     )
+ 
+ 
++_UPSAMPLE_POINTWISE_IMPL = os.getenv(
++    "NVI_UPSAMPLE_POINTWISE_IMPL", "legacy"
++).strip().lower()
++if _UPSAMPLE_POINTWISE_IMPL not in ("legacy", "compiled"):
++    raise ValueError(
++        "NVI_UPSAMPLE_POINTWISE_IMPL must be 'legacy' or 'compiled', "
++        f"got {_UPSAMPLE_POINTWISE_IMPL!r}"
++    )
++
++
+ def _decoder_residual_norm(tgt, update, norm_weight, norm_bias, norm_eps):
+     return F.layer_norm(
+         tgt + update,
+@@ -93,6 +103,18 @@
+     )
+ 
+ 
++def _decoder_attention_mask(
++    mask_logits, num_heads, output_height, output_width
++):
++    resized_mask = F.interpolate(
++        mask_logits,
++        size=(output_height, output_width),
++        mode="bilinear",
++        align_corners=False,
++    )
++    return _decoder_attention_mask_pointwise(resized_mask, num_heads)
++
++
+ _compiled_decoder_residual_norm = torch.compile(
+     _decoder_residual_norm, dynamic=False, fullgraph=True
+ )
+@@ -108,6 +130,12 @@
+     )
+     for size in ((96, 128), (48, 64), (24, 32))
+ }
++_compiled_decoder_attention_mask_by_size = {
++    size: torch.compile(
++        _decoder_attention_mask, dynamic=False, fullgraph=True
++    )
++    for size in ((96, 128), (48, 64), (24, 32))
++}
+ 
+ 
+ class SelfAttentionLayer(nn.Module):
+@@ -594,23 +622,51 @@
+ 
+         # NOTE: prediction is of higher-resolution
+         # [B, Q, H, W] -> [B, Q, H*W] -> [B, h, Q, H*W] -> [B*h, Q, HW]
+-        attn_mask = F.interpolate(outputs_mask, size=attn_mask_target_size, mode="bilinear", align_corners=False)
+-        # must use bool type
+-        # If a BoolTensor is provided, positions with ``True`` are not allowed to attend while ``False`` values will be unchanged.
+-        compiled_mask = _compiled_decoder_attention_mask_pointwise_by_size.get(
+-            tuple(attn_mask.shape[-2:])
++        target_size = tuple(attn_mask_target_size)
++        compiled_upsample_mask = _compiled_decoder_attention_mask_by_size.get(
++            target_size
+         )
+         if (
+-            _DECODER_POINTWISE_IMPL == "compiled"
+-            and compiled_mask is not None
+-            and attn_mask.is_cuda
++            _UPSAMPLE_POINTWISE_IMPL == "compiled"
++            and compiled_upsample_mask is not None
++            and outputs_mask.is_cuda
+             and not self.training
+         ):
+-            attn_mask = compiled_mask(
+-                attn_mask, self.num_heads
++            attn_mask = compiled_upsample_mask(
++                outputs_mask,
++                self.num_heads,
++                target_size[0],
++                target_size[1],
+             )
+         else:
+-            attn_mask = (attn_mask.sigmoid().flatten(2).unsqueeze(1).repeat(1, self.num_heads, 1, 1).flatten(0, 1) < 0.5).bool()
++            attn_mask = F.interpolate(
++                outputs_mask,
++                size=target_size,
++                mode="bilinear",
++                align_corners=False,
++            )
++            # must use bool type. True positions cannot be attended to.
++            compiled_mask = (
++                _compiled_decoder_attention_mask_pointwise_by_size.get(
++                    target_size
++                )
++            )
++            if (
++                _DECODER_POINTWISE_IMPL == "compiled"
++                and compiled_mask is not None
++                and attn_mask.is_cuda
++                and not self.training
++            ):
++                attn_mask = compiled_mask(attn_mask, self.num_heads)
++            else:
++                attn_mask = (
++                    attn_mask.sigmoid()
++                    .flatten(2)
++                    .unsqueeze(1)
++                    .repeat(1, self.num_heads, 1, 1)
++                    .flatten(0, 1)
++                    < 0.5
++                ).bool()
+         attn_mask = attn_mask.detach()
+ 
+         return outputs_class, outputs_mask, attn_mask
+diff --git a/mask2former/modeling/pixel_decoder/msdeformattn.py b/mask2former/modeling/pixel_decoder/msdeformattn.py
+--- a/mask2former/modeling/pixel_decoder/msdeformattn.py
++++ b/mask2former/modeling/pixel_decoder/msdeformattn.py
+@@ -47,6 +47,30 @@
+ )
+ 
+ 
++_UPSAMPLE_POINTWISE_IMPL = os.getenv(
++    "NVI_UPSAMPLE_POINTWISE_IMPL", "legacy"
++).strip().lower()
++if _UPSAMPLE_POINTWISE_IMPL not in ("legacy", "compiled"):
++    raise ValueError(
++        "NVI_UPSAMPLE_POINTWISE_IMPL must be 'legacy' or 'compiled', "
++        f"got {_UPSAMPLE_POINTWISE_IMPL!r}"
++    )
++
++
++def _pixel_decoder_upsample_add(coarse, lateral):
++    return lateral + F.interpolate(
++        coarse,
++        size=lateral.shape[-2:],
++        mode="bilinear",
++        align_corners=False,
++    )
++
++
++_compiled_pixel_decoder_upsample_add = torch.compile(
++    _pixel_decoder_upsample_add, dynamic=False, fullgraph=True
++)
++
++
+ # MSDeformAttn Transformer encoder in deformable detr
+ class MSDeformAttnTransformerEncoderOnly(nn.Module):
+     def __init__(self, d_model=256, nhead=8,
+@@ -430,8 +454,22 @@
+             lateral_conv = self.lateral_convs[idx]
+             output_conv = self.output_convs[idx]
+             cur_fpn = lateral_conv(x)
+-            # Following FPN implementation, we use nearest upsampling here
+-            y = cur_fpn + F.interpolate(out[-1], size=cur_fpn.shape[-2:], mode="bilinear", align_corners=False)
++            # Bilinear top-down resize followed by the lateral residual add.
++            if (
++                _UPSAMPLE_POINTWISE_IMPL == "compiled"
++                and cur_fpn.is_cuda
++                and not self.training
++            ):
++                y = _compiled_pixel_decoder_upsample_add(
++                    out[-1], cur_fpn
++                )
++            else:
++                y = cur_fpn + F.interpolate(
++                    out[-1],
++                    size=cur_fpn.shape[-2:],
++                    mode="bilinear",
++                    align_corners=False,
++                )
+             y = output_conv(y)
+             out.append(y)
+ 
+diff --git a/mask2former/maskformer_model.py b/mask2former/maskformer_model.py
+--- a/mask2former/maskformer_model.py
++++ b/mask2former/maskformer_model.py
+@@ -1,4 +1,5 @@
+ # Copyright (c) Facebook, Inc. and its affiliates.
++import os
+ from typing import Tuple
+ 
+ import torch
+@@ -17,6 +18,34 @@
+ from .modeling.matcher import HungarianMatcher
+ 
+ 
++_UPSAMPLE_POINTWISE_IMPL = os.getenv(
++    "NVI_UPSAMPLE_POINTWISE_IMPL", "legacy"
++).strip().lower()
++if _UPSAMPLE_POINTWISE_IMPL not in ("legacy", "compiled"):
++    raise ValueError(
++        "NVI_UPSAMPLE_POINTWISE_IMPL must be 'legacy' or 'compiled', "
++        f"got {_UPSAMPLE_POINTWISE_IMPL!r}"
++    )
++
++
++def _mask_logits_upsample_sigmoid(
++    mask_logits, output_height, output_width
++):
++    return torch.sigmoid(
++        F.interpolate(
++            mask_logits,
++            size=(output_height, output_width),
++            mode="bilinear",
++            align_corners=False,
++        )
++    )
++
++
++_compiled_mask_logits_upsample_sigmoid = torch.compile(
++    _mask_logits_upsample_sigmoid, dynamic=False, fullgraph=True
++)
++
++
+ @META_ARCH_REGISTRY.register()
+ class MaskFormer(nn.Module):
+     """
+@@ -218,13 +247,36 @@
+         else:
+             mask_cls_results = outputs["pred_logits"]
+             mask_pred_results = outputs["pred_masks"]
+-            # upsample masks
+-            mask_pred_results = F.interpolate(
+-                mask_pred_results,
+-                size=(images.tensor.shape[-2], images.tensor.shape[-1]),
+-                mode="bilinear",
+-                align_corners=False,
++            # The production semantic-only path consumes sigmoid(mask logits).
++            # Fuse it with bilinear interpolation so the large FP32 resized-logit
++            # tensor is never materialized. Other inference modes retain the
++            # original logits contract.
++            fused_mask_probabilities = (
++                _UPSAMPLE_POINTWISE_IMPL == "compiled"
++                and mask_pred_results.is_cuda
++                and self.semantic_on
++                and not self.panoptic_on
++                and not self.instance_on
++                and not self.sem_seg_postprocess_before_inference
+             )
++            if fused_mask_probabilities:
++                mask_pred_results = (
++                    _compiled_mask_logits_upsample_sigmoid(
++                        mask_pred_results,
++                        images.tensor.shape[-2],
++                        images.tensor.shape[-1],
++                    )
++                )
++            else:
++                mask_pred_results = F.interpolate(
++                    mask_pred_results,
++                    size=(
++                        images.tensor.shape[-2],
++                        images.tensor.shape[-1],
++                    ),
++                    mode="bilinear",
++                    align_corners=False,
++                )
+ 
+             del outputs
+ 
+@@ -244,7 +296,14 @@
+ 
+                 # semantic segmentation inference
+                 if self.semantic_on:
+-                    r = retry_if_cuda_oom(self.semantic_inference)(mask_cls_result, mask_pred_result)
++                    if fused_mask_probabilities:
++                        r = retry_if_cuda_oom(
++                            self.semantic_inference_from_mask_probabilities
++                        )(mask_cls_result, mask_pred_result)
++                    else:
++                        r = retry_if_cuda_oom(self.semantic_inference)(
++                            mask_cls_result, mask_pred_result
++                        )
+                     if not self.sem_seg_postprocess_before_inference:
+                         r = retry_if_cuda_oom(sem_seg_postprocess)(r, image_size, height, width)
+                     processed_results[-1]["sem_seg"] = r
+@@ -283,6 +342,14 @@
+         semseg = torch.einsum("qc,qhw->chw", mask_cls, mask_pred)
+         return semseg
+ 
++    def semantic_inference_from_mask_probabilities(
++        self, mask_cls, mask_probabilities
++    ):
++        mask_cls = F.softmax(mask_cls, dim=-1)[..., :-1]
++        return torch.einsum(
++            "qc,qhw->chw", mask_cls, mask_probabilities
++        )
++
+     def panoptic_inference(self, mask_cls, mask_pred):
+         scores, labels = F.softmax(mask_cls, dim=-1).max(-1)
+         mask_pred = mask_pred.sigmoid()

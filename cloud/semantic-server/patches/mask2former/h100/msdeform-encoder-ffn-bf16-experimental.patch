@@ -1,0 +1,121 @@
+diff --git a/mask2former/modeling/pixel_decoder/msdeformattn.py b/mask2former/modeling/pixel_decoder/msdeformattn.py
+--- a/mask2former/modeling/pixel_decoder/msdeformattn.py
++++ b/mask2former/modeling/pixel_decoder/msdeformattn.py
+@@ -47,6 +47,51 @@ _compiled_msdeform_residual_norm = torch.compile(
+ )
+ 
+ 
++_MSDEFORM_FFN_IMPL = os.getenv(
++    "NVI_MSDEFORM_FFN_IMPL", "legacy"
++).strip().lower()
++if _MSDEFORM_FFN_IMPL not in ("legacy", "compiled-bf16"):
++    raise ValueError(
++        "NVI_MSDEFORM_FFN_IMPL must be 'legacy' or 'compiled-bf16', "
++        f"got {_MSDEFORM_FFN_IMPL!r}"
++    )
++
++
++def _msdeform_ffn_bf16(
++    source,
++    linear1_weight_bf16,
++    linear1_bias_bf16,
++    linear2_weight_bf16,
++    linear2_bias_bf16,
++    norm_weight,
++    norm_bias,
++    norm_eps,
++):
++    """Run encoder FFN GEMMs in BF16 and keep residual/LayerNorm in FP32."""
++    hidden = F.relu(
++        F.linear(
++            source.to(torch.bfloat16),
++            linear1_weight_bf16,
++            linear1_bias_bf16,
++        )
++    )
++    update = F.linear(
++        hidden, linear2_weight_bf16, linear2_bias_bf16
++    ).float()
++    return F.layer_norm(
++        source + update,
++        (source.shape[-1],),
++        norm_weight,
++        norm_bias,
++        norm_eps,
++    )
++
++
++_compiled_msdeform_ffn_bf16 = torch.compile(
++    _msdeform_ffn_bf16, dynamic=False, fullgraph=True
++)
++
++
+ _UPSAMPLE_POINTWISE_IMPL = os.getenv(
+     "NVI_UPSAMPLE_POINTWISE_IMPL", "legacy"
+ ).strip().lower()
+@@ -195,11 +240,65 @@ class MSDeformAttnTransformerEncoderLayer(nn.Module):
+         self.dropout3 = nn.Dropout(dropout)
+         self.norm2 = nn.LayerNorm(d_model)
+ 
++        # Inference-only derived copies. Checkpoint/state-dict behavior remains
++        # unchanged, and each cloned encoder layer owns its own cached weights.
++        self._linear1_weight_bf16_cache = None
++        self._linear1_bias_bf16_cache = None
++        self._linear2_weight_bf16_cache = None
++        self._linear2_bias_bf16_cache = None
++
+     @staticmethod
+     def with_pos_embed(tensor, pos):
+         return tensor if pos is None else tensor + pos
+ 
++    def _bf16_ffn_parameters(self, device):
++        if (
++            self._linear1_weight_bf16_cache is None
++            or self._linear1_weight_bf16_cache.device != device
++        ):
++            self._linear1_weight_bf16_cache = self.linear1.weight.to(
++                torch.bfloat16
++            )
++            self._linear1_bias_bf16_cache = (
++                self.linear1.bias.to(torch.bfloat16)
++                if self.linear1.bias is not None
++                else None
++            )
++            self._linear2_weight_bf16_cache = self.linear2.weight.to(
++                torch.bfloat16
++            )
++            self._linear2_bias_bf16_cache = (
++                self.linear2.bias.to(torch.bfloat16)
++                if self.linear2.bias is not None
++                else None
++            )
++        return (
++            self._linear1_weight_bf16_cache,
++            self._linear1_bias_bf16_cache,
++            self._linear2_weight_bf16_cache,
++            self._linear2_bias_bf16_cache,
++        )
++
+     def forward_ffn(self, src):
++        if (
++            _MSDEFORM_FFN_IMPL == "compiled-bf16"
++            and src.is_cuda
++            and not self.training
++            and self.activation is F.relu
++        ):
++            linear1_weight, linear1_bias, linear2_weight, linear2_bias = (
++                self._bf16_ffn_parameters(src.device)
++            )
++            return _compiled_msdeform_ffn_bf16(
++                src,
++                linear1_weight,
++                linear1_bias,
++                linear2_weight,
++                linear2_bias,
++                self.norm2.weight,
++                self.norm2.bias,
++                self.norm2.eps,
++            )
+         src2 = self.linear2(self.dropout2(self.activation(self.linear1(src))))
+         if (
+             _MSDEFORM_NORM_IMPL == "compiled"

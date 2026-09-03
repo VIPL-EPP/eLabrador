@@ -1,0 +1,20 @@
+diff --git a/mask2former/modeling/backbone/swin.py b/mask2former/modeling/backbone/swin.py
+--- a/mask2former/modeling/backbone/swin.py
++++ b/mask2former/modeling/backbone/swin.py
+@@ -19,7 +19,15 @@ from detectron2.modeling import BACKBONE_REGISTRY, Backbone, ShapeSpec
+ 
+ # The fixed production geometry intentionally compiles 4 batches x 4 stages x
+ # shifted/unshifted score modifiers. Keep Dynamo's runaway guard above that set.
+-dynamo_config.recompile_limit = max(dynamo_config.recompile_limit, 64)
++if hasattr(dynamo_config, "recompile_limit"):
++    dynamo_config.recompile_limit = max(dynamo_config.recompile_limit, 64)
++else:
++    # PyTorch 2.5 uses cache_size_limit/accumulated_cache_size_limit for the
++    # equivalent per-frame and cumulative guards. DTK 26.04 ships that API.
++    dynamo_config.cache_size_limit = max(dynamo_config.cache_size_limit, 64)
++    dynamo_config.accumulated_cache_size_limit = max(
++        dynamo_config.accumulated_cache_size_limit, 64
++    )
+ 
+ 
+ _FLEX_ATTENTION_KEYS = tuple(

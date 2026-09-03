@@ -1,0 +1,188 @@
+diff --git a/mask2former/modeling/pixel_decoder/ops/src/cuda/ms_deform_im2col_cuda.cuh b/mask2former/modeling/pixel_decoder/ops/src/cuda/ms_deform_im2col_cuda.cuh
+--- a/mask2former/modeling/pixel_decoder/ops/src/cuda/ms_deform_im2col_cuda.cuh
++++ b/mask2former/modeling/pixel_decoder/ops/src/cuda/ms_deform_im2col_cuda.cuh
+@@ -16,6 +16,7 @@
+ 
+ #include <cstdio>
+ #include <algorithm>
++#include <cstdlib>
+ #include <cstring>
+ 
+ #include <ATen/ATen.h>
+@@ -88,6 +89,58 @@
+   return val;
+ }
+ 
++template <typename scalar_t>
++__device__ __forceinline__ scalar_t
++ms_deform_attn_im2col_bilinear_h100_c32(
++    const scalar_t *__restrict__ bottom_data,
++    const int height,
++    const int width,
++    const scalar_t h,
++    const scalar_t w,
++    const int m,
++    const int c)
++{
++  constexpr int kHeads = 8;
++  constexpr int kChannels = 32;
++  const int h_low = floor(h);
++  const int w_low = floor(w);
++  const int h_high = h_low + 1;
++  const int w_high = w_low + 1;
++  const scalar_t lh = h - h_low;
++  const scalar_t lw = w - w_low;
++  constexpr int w_stride = kHeads * kChannels;
++  const int h_stride = width * w_stride;
++  const int h_low_ptr_offset = h_low * h_stride;
++  const int h_high_ptr_offset = h_low_ptr_offset + h_stride;
++  const int w_low_ptr_offset = w_low * w_stride;
++  const int w_high_ptr_offset = w_low_ptr_offset + w_stride;
++  const int base_ptr = m * kChannels + c;
++
++  scalar_t v1 = 0, v2 = 0, v3 = 0, v4 = 0;
++  if (h_low >= 0 && h_high < height && w_low >= 0 && w_high < width)
++  {
++    v1 = bottom_data[h_low_ptr_offset + w_low_ptr_offset + base_ptr];
++    v2 = bottom_data[h_low_ptr_offset + w_high_ptr_offset + base_ptr];
++    v3 = bottom_data[h_high_ptr_offset + w_low_ptr_offset + base_ptr];
++    v4 = bottom_data[h_high_ptr_offset + w_high_ptr_offset + base_ptr];
++  }
++  else
++  {
++    if (h_low >= 0 && w_low >= 0)
++      v1 = bottom_data[h_low_ptr_offset + w_low_ptr_offset + base_ptr];
++    if (h_low >= 0 && w_high < width)
++      v2 = bottom_data[h_low_ptr_offset + w_high_ptr_offset + base_ptr];
++    if (h_high < height && w_low >= 0)
++      v3 = bottom_data[h_high_ptr_offset + w_low_ptr_offset + base_ptr];
++    if (h_high < height && w_high < width)
++      v4 = bottom_data[h_high_ptr_offset + w_high_ptr_offset + base_ptr];
++  }
++
++  const scalar_t top = fma(lw, v2 - v1, v1);
++  const scalar_t bottom = fma(lw, v4 - v3, v3);
++  return fma(lh, bottom - top, top);
++}
++
+ 
+ template <typename scalar_t>
+ __device__ void ms_deform_attn_col2im_bilinear(const scalar_t* &bottom_data, 
+@@ -303,6 +356,71 @@
+   }
+ }
+ 
++// Opt-in production-shape path: one warp owns the 32 channels of one
++// (batch, query, head) item. A 2-D grid separates batches, fixed 3x4 sampling
++// loops are unrolled, and the fixed feature pyramid stays in immediates.
++template <typename scalar_t>
++__global__ void ms_deformable_im2col_gpu_kernel_h100_c32(
++                                                const int samples_per_batch,
++                                                const scalar_t *__restrict__ data_value,
++                                                const scalar_t *__restrict__ data_sampling_loc,
++                                                const scalar_t *__restrict__ data_attn_weight,
++                                                const int spatial_size,
++                                                scalar_t *__restrict__ data_col)
++{
++  constexpr int kChannels = 32;
++  constexpr int kHeads = 8;
++  constexpr int kLevels = 3;
++  constexpr int kPoints = 4;
++
++  const int lane = threadIdx.x & (kChannels - 1);
++  const int sampling_in_batch =
++      blockIdx.x * (blockDim.x / kChannels) + threadIdx.x / kChannels;
++  if (sampling_in_batch >= samples_per_batch)
++    return;
++
++  const int b_col = blockIdx.y;
++  const int sampling_index = b_col * samples_per_batch + sampling_in_batch;
++  const int m_col = sampling_in_batch & (kHeads - 1);
++  int data_weight_ptr = sampling_index * kLevels * kPoints;
++  int data_loc_w_ptr = data_weight_ptr << 1;
++  constexpr int qid_stride = kHeads * kChannels;
++  const int data_value_ptr_init_offset = b_col * spatial_size * qid_stride;
++  scalar_t col = 0;
++
++#pragma unroll
++  for (int l_col = 0; l_col < kLevels; ++l_col)
++  {
++    const int level_start_id =
++        l_col == 0 ? 0 : (l_col == 1 ? 768 : 3840);
++    const int spatial_h = 24 << l_col;
++    const int spatial_w = 32 << l_col;
++    const scalar_t *data_value_ptr =
++        data_value + data_value_ptr_init_offset + level_start_id * qid_stride;
++
++#pragma unroll
++    for (int p_col = 0; p_col < kPoints; ++p_col)
++    {
++      const scalar_t loc_w = data_sampling_loc[data_loc_w_ptr];
++      const scalar_t loc_h = data_sampling_loc[data_loc_w_ptr + 1];
++      const scalar_t weight = data_attn_weight[data_weight_ptr];
++      const scalar_t h_im = loc_h * spatial_h - scalar_t(0.5);
++      const scalar_t w_im = loc_w * spatial_w - scalar_t(0.5);
++
++      if (h_im > -1 && w_im > -1 && h_im < spatial_h && w_im < spatial_w)
++      {
++        col = fma(ms_deform_attn_im2col_bilinear_h100_c32(
++                      data_value_ptr, spatial_h, spatial_w,
++                      h_im, w_im, m_col, lane),
++                  weight, col);
++      }
++      ++data_weight_ptr;
++      data_loc_w_ptr += 2;
++    }
++  }
++  data_col[sampling_index * kChannels + lane] = col;
++}
++
+ template <typename scalar_t, unsigned int blockSize>
+ __global__ void ms_deformable_col2im_gpu_kernel_shm_blocksize_aware_reduce_v1(const int n,
+                                                 const scalar_t *grad_col,
+@@ -943,12 +1061,32 @@
+ {
+   const int num_kernels = batch_size * num_query * num_heads * channels;
+   const int num_actual_kernels = batch_size * num_query * num_heads * channels;
+-  const int num_threads = CUDA_NUM_THREADS;
+-  ms_deformable_im2col_gpu_kernel<scalar_t>
+-      <<<GET_BLOCKS(num_actual_kernels, num_threads), num_threads,
+-          0, stream>>>(
+-      num_kernels, data_value, data_spatial_shapes, data_level_start_index, data_sampling_loc, data_attn_weight, 
+-      batch_size, spatial_size, num_heads, channels, num_levels, num_query, num_point, data_col);
++  static const bool use_h100_fixed_shape = [] {
++    const char *mode = std::getenv("NVI_MSDEFORM_IMPL");
++    return mode != nullptr && std::strcmp(mode, "h100-fixed-fp32") == 0;
++  }();
++  if (use_h100_fixed_shape &&
++      channels == 32 && num_heads == 8 && num_levels == 3 && num_point == 4 &&
++      spatial_size == 16128 && num_query == 16128)
++  {
++    constexpr int num_threads = 128;
++    constexpr int warps_per_block = num_threads / 32;
++    const int samples_per_batch = num_query * num_heads;
++    const dim3 grid(GET_BLOCKS(samples_per_batch, warps_per_block), batch_size);
++    ms_deformable_im2col_gpu_kernel_h100_c32<scalar_t>
++        <<<grid, num_threads, 0, stream>>>(
++        samples_per_batch, data_value, data_sampling_loc, data_attn_weight,
++        spatial_size, data_col);
++  }
++  else
++  {
++    const int num_threads = CUDA_NUM_THREADS;
++    ms_deformable_im2col_gpu_kernel<scalar_t>
++        <<<GET_BLOCKS(num_actual_kernels, num_threads), num_threads, 0, stream>>>(
++        num_kernels, data_value, data_spatial_shapes, data_level_start_index,
++        data_sampling_loc, data_attn_weight, batch_size, spatial_size, num_heads,
++        channels, num_levels, num_query, num_point, data_col);
++  }
+   
+   cudaError_t err = cudaGetLastError();
+   if (err != cudaSuccess)
+@@ -1329,4 +1467,4 @@
+     printf("error in ms_deformable_col2im_cuda: %s\n", cudaGetErrorString(err));
+   }
+ 
+-}
+\ No newline at end of file
++}

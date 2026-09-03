@@ -1,0 +1,40 @@
+diff --git a/mask2former/modeling/pixel_decoder/ops/setup.py b/mask2former/modeling/pixel_decoder/ops/setup.py
+index f8bdaf1..5d4bd31 100644
+--- a/mask2former/modeling/pixel_decoder/ops/setup.py
++++ b/mask2former/modeling/pixel_decoder/ops/setup.py
+@@ -16,7 +16,7 @@ import glob
+ 
+ import torch
+ 
+-from torch.utils.cpp_extension import CUDA_HOME
++from torch.utils.cpp_extension import CUDA_HOME, ROCM_HOME
+ from torch.utils.cpp_extension import CppExtension
+ from torch.utils.cpp_extension import CUDAExtension
+ 
+@@ -37,7 +37,10 @@ def get_extensions():
+     define_macros = []
+ 
+     # Force cuda since torch ask for a device, not if cuda is in fact available.
+-    if (os.environ.get('FORCE_CUDA') or torch.cuda.is_available()) and CUDA_HOME is not None:
++    is_rocm_pytorch = torch.version.hip is not None and ROCM_HOME is not None
++    if (
++        os.environ.get('FORCE_CUDA') or torch.cuda.is_available()
++    ) and (CUDA_HOME is not None or is_rocm_pytorch):
+         extension = CUDAExtension
+         sources += source_cuda
+         define_macros += [("WITH_CUDA", None)]
+@@ -45,10 +48,13 @@ def get_extensions():
+             "-DCUDA_HAS_FP16=1",
+             "-D__CUDA_NO_HALF_OPERATORS__",
+             "-D__CUDA_NO_HALF_CONVERSIONS__",
+             "-D__CUDA_NO_HALF2_OPERATORS__",
+         ]
++        if is_rocm_pytorch:
++            extra_compile_args["nvcc"].append("--gpu-max-threads-per-block=1024")
++
+     else:
+-        if CUDA_HOME is None:
++        if CUDA_HOME is None and not is_rocm_pytorch:
+             raise NotImplementedError('CUDA_HOME is None. Please set environment variable CUDA_HOME.')
+         else:
+             raise NotImplementedError('No CUDA runtime is found. Please set FORCE_CUDA=1 or test it by running torch.cuda.is_available().')
