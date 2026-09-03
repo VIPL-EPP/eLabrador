@@ -1,0 +1,94 @@
+--- a/mask2former/modeling/pixel_decoder/msdeformattn.py
++++ b/mask2former/modeling/pixel_decoder/msdeformattn.py
+@@ -30,6 +30,7 @@
+ 
+         self.d_model = d_model
+         self.nhead = nhead
++        self._shape_cache = {}
+ 
+         encoder_layer = MSDeformAttnTransformerEncoderLayer(d_model, dim_feedforward,
+                                                             dropout, activation,
+@@ -49,6 +50,23 @@
+                 m._reset_parameters()
+         normal_(self.level_embed)
+ 
++    def _device_shapes(self, spatial_shapes, device):
++        """Device copies of the shape metadata, built at most once per shape set.
++
++        MSDeformAttn's CUDA kernel needs int64 device tensors, but rebuilding them on
++        every call cost a blocking 48-byte pageable H2D copy. The inference scale set
++        is fixed, so the first call for a shape set fills the cache and later calls
++        reuse it. Concurrent first calls only duplicate the build, never corrupt it.
++        """
++        key = (spatial_shapes, device)
++        cached = self._shape_cache.get(key)
++        if cached is None:
++            shapes = torch.as_tensor(spatial_shapes, dtype=torch.long, device=device)
++            starts = torch.cat((shapes.new_zeros((1, )), shapes.prod(1).cumsum(0)[:-1]))
++            cached = (shapes, starts)
++            self._shape_cache[key] = cached
++        return cached
++
+     def get_valid_ratio(self, mask):
+         _, H, W = mask.shape
+         valid_H = torch.sum(~mask[:, :, 0], 1)
+@@ -79,12 +97,28 @@
+         src_flatten = torch.cat(src_flatten, 1)
+         mask_flatten = torch.cat(mask_flatten, 1)
+         lvl_pos_embed_flatten = torch.cat(lvl_pos_embed_flatten, 1)
+-        spatial_shapes = torch.as_tensor(spatial_shapes, dtype=torch.long, device=src_flatten.device)
+-        level_start_index = torch.cat((spatial_shapes.new_zeros((1, )), spatial_shapes.prod(1).cumsum(0)[:-1]))
++        # Keep the shape metadata as Python ints. Everything downstream that needs it
++        # for control flow -- reference-point linspace, torch.split sizes, view shapes --
++        # would otherwise have to copy it back from the device and block the stream.
++        spatial_shapes = tuple(spatial_shapes)
++        level_start_index = []
++        flattened_length = 0
++        for h, w in spatial_shapes:
++            level_start_index.append(flattened_length)
++            flattened_length += h * w
++        level_start_index = tuple(level_start_index)
++        assert flattened_length == src_flatten.shape[1], (
++            "flattened source length {} does not match spatial shapes {}".format(
++                src_flatten.shape[1], spatial_shapes
++            )
++        )
++        spatial_shapes_device, level_start_index_device = self._device_shapes(
++            spatial_shapes, src_flatten.device
++        )
+         valid_ratios = torch.stack([self.get_valid_ratio(m) for m in masks], 1)
+ 
+         # encoder
+-        memory = self.encoder(src_flatten, spatial_shapes, level_start_index, valid_ratios, lvl_pos_embed_flatten, mask_flatten)
++        memory = self.encoder(src_flatten, spatial_shapes, spatial_shapes_device, level_start_index_device, valid_ratios, lvl_pos_embed_flatten, mask_flatten)
+ 
+         return memory, spatial_shapes, level_start_index
+ 
+@@ -152,11 +186,12 @@
+         reference_points = reference_points[:, :, None] * valid_ratios[:, None]
+         return reference_points
+ 
+-    def forward(self, src, spatial_shapes, level_start_index, valid_ratios, pos=None, padding_mask=None):
++    def forward(self, src, spatial_shapes, spatial_shapes_device, level_start_index, valid_ratios, pos=None, padding_mask=None):
+         output = src
++        # spatial_shapes holds Python ints, so the linspace below stays on the host.
+         reference_points = self.get_reference_points(spatial_shapes, valid_ratios, device=src.device)
+         for _, layer in enumerate(self.layers):
+-            output = layer(output, pos, reference_points, spatial_shapes, level_start_index, padding_mask)
++            output = layer(output, pos, reference_points, spatial_shapes_device, level_start_index, padding_mask)
+ 
+         return output
+ 
+--- a/mask2former/modeling/pixel_decoder/ops/modules/ms_deform_attn.py
++++ b/mask2former/modeling/pixel_decoder/ops/modules/ms_deform_attn.py
+@@ -93,7 +93,9 @@
+         """
+         N, Len_q, _ = query.shape
+         N, Len_in, _ = input_flatten.shape
+-        assert (input_spatial_shapes[:, 0] * input_spatial_shapes[:, 1]).sum() == Len_in
++        # The same invariant is checked on the host in MSDeformAttnTransformerEncoderOnly
++        # .forward, where the shapes are still Python ints. Comparing the device tensor
++        # against Len_in here synchronized the stream once per encoder layer.
+ 
+         value = self.value_proj(input_flatten)
+         if input_padding_mask is not None:

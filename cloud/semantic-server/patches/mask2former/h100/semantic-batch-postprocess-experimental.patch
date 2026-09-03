@@ -1,0 +1,107 @@
+diff --git a/mask2former/maskformer_model.py b/mask2former/maskformer_model.py
+--- a/mask2former/maskformer_model.py
++++ b/mask2former/maskformer_model.py
+@@ -28,6 +28,16 @@
+     )
+ 
+ 
++_SEMANTIC_BATCH_IMPL = os.getenv(
++    "NVI_SEMANTIC_BATCH_IMPL", "legacy"
++).strip().lower()
++if _SEMANTIC_BATCH_IMPL not in ("legacy", "batched", "compiled-batched"):
++    raise ValueError(
++        "NVI_SEMANTIC_BATCH_IMPL must be 'legacy', 'batched', or "
++        f"'compiled-batched', got {_SEMANTIC_BATCH_IMPL!r}"
++    )
++
++
+ def _mask_logits_upsample_sigmoid(
+     mask_logits, output_height, output_width
+ ):
+@@ -46,6 +56,37 @@
+ )
+ 
+ 
++def _semantic_batch_postprocess(
++    mask_cls,
++    mask_probabilities,
++    image_height,
++    image_width,
++    output_height,
++    output_width,
++):
++    """Batch semantic query aggregation before the final linear resize."""
++    mask_cls = F.softmax(mask_cls, dim=-1)[..., :-1]
++    mask_probabilities = mask_probabilities[
++        ..., :image_height, :image_width
++    ]
++    batch, queries, height, width = mask_probabilities.shape
++    semseg = torch.bmm(
++        mask_cls.transpose(1, 2),
++        mask_probabilities.reshape(batch, queries, height * width),
++    ).reshape(batch, mask_cls.shape[-1], height, width)
++    return F.interpolate(
++        semseg,
++        size=(output_height, output_width),
++        mode="bilinear",
++        align_corners=False,
++    )
++
++
++_compiled_semantic_batch_postprocess = torch.compile(
++    _semantic_batch_postprocess, dynamic=False, fullgraph=True
++)
++
++
+ @META_ARCH_REGISTRY.register()
+ class MaskFormer(nn.Module):
+     """
+@@ -280,6 +321,48 @@
+ 
+             del outputs
+ 
++            # The request scheduler already buckets equal input/output geometry.
++            # Preserve the original aggregate-then-resize order, but issue one
++            # batched BMM/resize instead of one pair of kernels per request.
++            if (
++                _SEMANTIC_BATCH_IMPL != "legacy"
++                and fused_mask_probabilities
++                and len(batched_inputs) > 0
++            ):
++                image_height, image_width = images.image_sizes[0]
++                output_height = batched_inputs[0].get(
++                    "height", image_height
++                )
++                output_width = batched_inputs[0].get("width", image_width)
++                uniform_geometry = all(
++                    tuple(image_size) == (image_height, image_width)
++                    and input_per_image.get("height", image_size[0])
++                    == output_height
++                    and input_per_image.get("width", image_size[1])
++                    == output_width
++                    for input_per_image, image_size in zip(
++                        batched_inputs, images.image_sizes
++                    )
++                )
++                if uniform_geometry:
++                    batch_postprocess = (
++                        _compiled_semantic_batch_postprocess
++                        if _SEMANTIC_BATCH_IMPL == "compiled-batched"
++                        else _semantic_batch_postprocess
++                    )
++                    semseg_batch = batch_postprocess(
++                        mask_cls_results,
++                        mask_pred_results,
++                        image_height,
++                        image_width,
++                        output_height,
++                        output_width,
++                    )
++                    return [
++                        {"sem_seg": semseg_batch[index]}
++                        for index in range(len(batched_inputs))
++                    ]
++
+             processed_results = []
+             for mask_cls_result, mask_pred_result, input_per_image, image_size in zip(
+                 mask_cls_results, mask_pred_results, batched_inputs, images.image_sizes

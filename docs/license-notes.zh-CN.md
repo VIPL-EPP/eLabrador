@@ -14,6 +14,7 @@
 | DUtils / DVision | [`edge/src/NVI/nvi_vio/VINS-Mono/pose_graph/src/ThirdParty/DUtils`](../edge/src/NVI/nvi_vio/VINS-Mono/pose_graph/src/ThirdParty/DUtils)、[`edge/src/NVI/nvi_vio/VINS-Mono/pose_graph/src/ThirdParty/DVision`](../edge/src/NVI/nvi_vio/VINS-Mono/pose_graph/src/ThirdParty/DVision) | LGPLv3 or later |
 | ASRT Speech Recognition Tool | [`edge/src/NVI/nvi_speech/src/asrt_sdk_ros`](../edge/src/NVI/nvi_speech/src/asrt_sdk_ros) | GPLv3 or later |
 | SensaGram Android APK | [`mobile/android/SensaGram-v1.5.2.apk.1.1`](../mobile/android/SensaGram-v1.5.2.apk.1.1) | 来自第三方项目 [`UmerCodez/SensaGram`](https://github.com/UmerCodez/SensaGram) 的 `v1.5.2` 发布版二进制文件；许可证为 GPL-3.0；版权归上游 SensaGram 作者/贡献者所有 |
+| Mask2Former 优化补丁 | [`cloud/semantic-server/patches/mask2former`](../cloud/semantic-server/patches/mask2former) | 针对 Meta Mask2Former 源码的修改；上游 MIT 许可证与版权声明保存在补丁目录中 |
 
 ## 外部服务
 

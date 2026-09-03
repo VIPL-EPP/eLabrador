@@ -1,0 +1,234 @@
+diff --git a/mask2former/modeling/transformer_decoder/mask2former_transformer_decoder.py b/mask2former/modeling/transformer_decoder/mask2former_transformer_decoder.py
+--- a/mask2former/modeling/transformer_decoder/mask2former_transformer_decoder.py
++++ b/mask2former/modeling/transformer_decoder/mask2former_transformer_decoder.py
+@@ -1,6 +1,7 @@
+ # Copyright (c) Facebook, Inc. and its affiliates.
+ # Modified by Bowen Cheng from: https://github.com/facebookresearch/detr/blob/master/models/detr.py
+ import logging
++import os
+ import fvcore.nn.weight_init as weight_init
+ from typing import Optional
+ import torch
+@@ -14,6 +15,101 @@ from .position_encoding import PositionEmbeddingSine
+ from .maskformer_transformer_decoder import TRANSFORMER_DECODER_REGISTRY
+ 
+ 
++_DECODER_POINTWISE_IMPL = os.getenv(
++    "NVI_DECODER_POINTWISE_IMPL", "legacy"
++).strip().lower()
++if _DECODER_POINTWISE_IMPL not in ("legacy", "compiled"):
++    raise ValueError(
++        "NVI_DECODER_POINTWISE_IMPL must be 'legacy' or 'compiled', "
++        f"got {_DECODER_POINTWISE_IMPL!r}"
++    )
++
++
++def _decoder_residual_norm(tgt, update, norm_weight, norm_bias, norm_eps):
++    return F.layer_norm(
++        tgt + update,
++        (tgt.shape[-1],),
++        norm_weight,
++        norm_bias,
++        norm_eps,
++    )
++
++
++def _decoder_ffn_post(
++    tgt,
++    linear1_weight,
++    linear1_bias,
++    linear2_weight,
++    linear2_bias,
++    norm_weight,
++    norm_bias,
++    norm_eps,
++):
++    update = F.linear(
++        F.relu(F.linear(tgt, linear1_weight, linear1_bias)),
++        linear2_weight,
++        linear2_bias,
++    )
++    return _decoder_residual_norm(
++        tgt, update, norm_weight, norm_bias, norm_eps
++    )
++
++
++def _decoder_prediction_heads(
++    output,
++    norm_weight,
++    norm_bias,
++    norm_eps,
++    class_weight,
++    class_bias,
++    mask1_weight,
++    mask1_bias,
++    mask2_weight,
++    mask2_bias,
++    mask3_weight,
++    mask3_bias,
++):
++    decoded = F.layer_norm(
++        output,
++        (output.shape[-1],),
++        norm_weight,
++        norm_bias,
++        norm_eps,
++    ).transpose(0, 1)
++    outputs_class = F.linear(decoded, class_weight, class_bias)
++    mask_embed = F.relu(F.linear(decoded, mask1_weight, mask1_bias))
++    mask_embed = F.relu(F.linear(mask_embed, mask2_weight, mask2_bias))
++    mask_embed = F.linear(mask_embed, mask3_weight, mask3_bias)
++    return outputs_class, mask_embed
++
++
++def _decoder_attention_mask_pointwise(resized_mask, num_heads):
++    return (
++        resized_mask.flatten(2)
++        .unsqueeze(1)
++        .repeat(1, num_heads, 1, 1)
++        .flatten(0, 1)
++        < 0
++    )
++
++
++_compiled_decoder_residual_norm = torch.compile(
++    _decoder_residual_norm, dynamic=False, fullgraph=True
++)
++_compiled_decoder_ffn_post = torch.compile(
++    _decoder_ffn_post, dynamic=False, fullgraph=True
++)
++_compiled_decoder_prediction_heads = torch.compile(
++    _decoder_prediction_heads, dynamic=False, fullgraph=True
++)
++_compiled_decoder_attention_mask_pointwise_by_size = {
++    size: torch.compile(
++        _decoder_attention_mask_pointwise, dynamic=False, fullgraph=True
++    )
++    for size in ((96, 128), (48, 64), (24, 32))
++}
++
++
+ class SelfAttentionLayer(nn.Module):
+ 
+     def __init__(self, d_model, nhead, dropout=0.0,
+@@ -44,8 +140,17 @@ class SelfAttentionLayer(nn.Module):
+         q = k = self.with_pos_embed(tgt, query_pos)
+         tgt2 = self.self_attn(q, k, value=tgt, attn_mask=tgt_mask,
+                               key_padding_mask=tgt_key_padding_mask)[0]
+-        tgt = tgt + self.dropout(tgt2)
+-        tgt = self.norm(tgt)
++        if _DECODER_POINTWISE_IMPL == "compiled" and tgt.is_cuda and not self.training:
++            tgt = _compiled_decoder_residual_norm(
++                tgt,
++                tgt2,
++                self.norm.weight,
++                self.norm.bias,
++                self.norm.eps,
++            )
++        else:
++            tgt = tgt + self.dropout(tgt2)
++            tgt = self.norm(tgt)
+ 
+         return tgt
+ 
+@@ -104,8 +209,17 @@ class CrossAttentionLayer(nn.Module):
+                                    key=self.with_pos_embed(memory, pos),
+                                    value=memory, attn_mask=memory_mask,
+                                    key_padding_mask=memory_key_padding_mask)[0]
+-        tgt = tgt + self.dropout(tgt2)
+-        tgt = self.norm(tgt)
++        if _DECODER_POINTWISE_IMPL == "compiled" and tgt.is_cuda and not self.training:
++            tgt = _compiled_decoder_residual_norm(
++                tgt,
++                tgt2,
++                self.norm.weight,
++                self.norm.bias,
++                self.norm.eps,
++            )
++        else:
++            tgt = tgt + self.dropout(tgt2)
++            tgt = self.norm(tgt)
+         
+         return tgt
+ 
+@@ -161,6 +275,22 @@ class FFNLayer(nn.Module):
+         return tensor if pos is None else tensor + pos
+ 
+     def forward_post(self, tgt):
++        if (
++            _DECODER_POINTWISE_IMPL == "compiled"
++            and tgt.is_cuda
++            and not self.training
++            and self.activation is F.relu
++        ):
++            return _compiled_decoder_ffn_post(
++                tgt,
++                self.linear1.weight,
++                self.linear1.bias,
++                self.linear2.weight,
++                self.linear2.bias,
++                self.norm.weight,
++                self.norm.bias,
++                self.norm.eps,
++            )
+         tgt2 = self.linear2(self.dropout(self.activation(self.linear1(tgt))))
+         tgt = tgt + self.dropout(tgt2)
+         tgt = self.norm(tgt)
+@@ -435,10 +565,31 @@ class MultiScaleMaskedTransformerDecoder(nn.Module):
+         return out
+ 
+     def forward_prediction_heads(self, output, mask_features, attn_mask_target_size):
+-        decoder_output = self.decoder_norm(output)
+-        decoder_output = decoder_output.transpose(0, 1)
+-        outputs_class = self.class_embed(decoder_output)
+-        mask_embed = self.mask_embed(decoder_output)
++        if (
++            _DECODER_POINTWISE_IMPL == "compiled"
++            and output.is_cuda
++            and not self.training
++            and self.mask_embed.num_layers == 3
++        ):
++            outputs_class, mask_embed = _compiled_decoder_prediction_heads(
++                output,
++                self.decoder_norm.weight,
++                self.decoder_norm.bias,
++                self.decoder_norm.eps,
++                self.class_embed.weight,
++                self.class_embed.bias,
++                self.mask_embed.layers[0].weight,
++                self.mask_embed.layers[0].bias,
++                self.mask_embed.layers[1].weight,
++                self.mask_embed.layers[1].bias,
++                self.mask_embed.layers[2].weight,
++                self.mask_embed.layers[2].bias,
++            )
++        else:
++            decoder_output = self.decoder_norm(output)
++            decoder_output = decoder_output.transpose(0, 1)
++            outputs_class = self.class_embed(decoder_output)
++            mask_embed = self.mask_embed(decoder_output)
+         outputs_mask = torch.einsum("bqc,bchw->bqhw", mask_embed, mask_features)
+ 
+         # NOTE: prediction is of higher-resolution
+@@ -446,7 +597,20 @@ class MultiScaleMaskedTransformerDecoder(nn.Module):
+         attn_mask = F.interpolate(outputs_mask, size=attn_mask_target_size, mode="bilinear", align_corners=False)
+         # must use bool type
+         # If a BoolTensor is provided, positions with ``True`` are not allowed to attend while ``False`` values will be unchanged.
+-        attn_mask = (attn_mask.sigmoid().flatten(2).unsqueeze(1).repeat(1, self.num_heads, 1, 1).flatten(0, 1) < 0.5).bool()
++        compiled_mask = _compiled_decoder_attention_mask_pointwise_by_size.get(
++            tuple(attn_mask.shape[-2:])
++        )
++        if (
++            _DECODER_POINTWISE_IMPL == "compiled"
++            and compiled_mask is not None
++            and attn_mask.is_cuda
++            and not self.training
++        ):
++            attn_mask = compiled_mask(
++                attn_mask, self.num_heads
++            )
++        else:
++            attn_mask = (attn_mask.sigmoid().flatten(2).unsqueeze(1).repeat(1, self.num_heads, 1, 1).flatten(0, 1) < 0.5).bool()
+         attn_mask = attn_mask.detach()
+ 
+         return outputs_class, outputs_mask, attn_mask

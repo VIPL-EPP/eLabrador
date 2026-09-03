@@ -6,6 +6,10 @@
 
 本文档描述端侧语义建图默认依赖的可复现路径：通过 HTTP 暴露的 Mask2Former Detectron2 FastAPI 服务。
 
+H100 与 BW1000 的简要性能数据见根目录 README 的
+[Mask2Former 云侧推理优化](../README.zh-CN.md#mask2former-云侧推理优化)；依赖补丁、配置和
+启动步骤以本文为准。
+
 ## 复现目标
 
 | 目标 | 状态 |
@@ -45,6 +49,22 @@ CUDA、PyTorch、Detectron2、Mask2Former、GPU 驱动和 checkpoint 版本必�
 
 这些依赖对 Python、PyTorch、CUDA、GPU 驱动、编译器和 Linux 架构版本敏感。请参考上游项目说明或实验室内部可复现构建脚本，安装与 checkpoint 和目标服务器匹配的版本。
 
+仓库提交了云端优化所需的完整补丁集。将 Mask2Former 固定到已验证 revision 后，按目标
+平台执行一次脚本即可按正确顺序应用全部补丁：
+
+```bash
+git clone https://github.com/facebookresearch/Mask2Former.git /path/to/Mask2Former
+git -C /path/to/Mask2Former checkout 9b0651c6c1d5b3af2e6da0589b719c514ec0d69a
+
+cloud/semantic-server/apply-mask2former-patches.sh h100 /path/to/Mask2Former
+# BW1000 使用：
+# cloud/semantic-server/apply-mask2former-patches.sh bw1000 /path/to/Mask2Former
+```
+
+脚本会先检查源码 revision 和整套补丁的可应用性，任何一步不匹配都不会修改目标源码。
+应用后必须重新构建 MultiScaleDeformableAttention extension。补丁清单、平台差异和许可证见
+[`cloud/semantic-server/patches/mask2former/`](../cloud/semantic-server/patches/mask2former/)。
+
 ## 主要文件
 
 | 路径 | 用途 |
@@ -52,6 +72,7 @@ CUDA、PyTorch、Detectron2、Mask2Former、GPU 驱动和 checkpoint 版本必�
 | [`cloud/semantic-server/fastapi-mask2former_detectron2.py`](../cloud/semantic-server/fastapi-mask2former_detectron2.py) | 默认 Mask2Former Detectron2 服务 |
 | [`cloud/semantic-server/config.py`](../cloud/semantic-server/config.py) | 设备和服务配置 |
 | [`cloud/semantic-server/configs/mask2former_detectron2_model.yaml`](../cloud/semantic-server/configs/mask2former_detectron2_model.yaml) | 默认 Detectron2 模型配置 |
+| [`cloud/semantic-server/apply-mask2former-patches.sh`](../cloud/semantic-server/apply-mask2former-patches.sh) | 一次性应用 H100 或 BW1000 Mask2Former 补丁集 |
 | [`cloud/semantic-server/docker_exec.sh`](../cloud/semantic-server/docker_exec.sh) | Docker Compose 使用的运行入口 |
 | [`cloud/semantic-server/.env.example`](../cloud/semantic-server/.env.example) | 环境变量模板 |
 
@@ -80,7 +101,67 @@ NVI_CONTAINER_USER=root
 NVI_HOST_PORT=8001
 NVI_GPU_DEVICE_ID=0
 NVI_CONTAINER_NAME=nvi-semantic-server
+NVI_FLOAT32_MATMUL_PRECISION=high
+NVI_AUTOCAST_DTYPE=none
+NVI_SWIN_ATTENTION_IMPL=legacy
+NVI_SWIN_FFN_IMPL=legacy
+NVI_DECODER_POINTWISE_IMPL=legacy
+NVI_MSDEFORM_IMPL=legacy
+NVI_MSDEFORM_NORM_IMPL=legacy
+NVI_MSDEFORM_FFN_IMPL=legacy
+NVI_UPSAMPLE_POINTWISE_IMPL=legacy
+NVI_SEMANTIC_BATCH_IMPL=legacy
+NVI_NPZ_COMPRESSION_LEVEL=1
+NVI_COMPRESS_THREADS=4
+NVI_PROFILE_SCHEDULER_TIMING=false
 ```
+
+补丁脚本只安装实现，不会自动打开实验模式。H100 最终候选配置为：
+
+```bash
+NVI_AUTOCAST_DTYPE=bfloat16
+NVI_SWIN_ATTENTION_IMPL=flex-bf16-layout-qkv
+NVI_SWIN_FFN_IMPL=compiled-bf16
+NVI_DECODER_POINTWISE_IMPL=compiled
+NVI_MSDEFORM_IMPL=h100-fixed-fp32
+NVI_MSDEFORM_NORM_IMPL=compiled
+NVI_MSDEFORM_FFN_IMPL=compiled-bf16
+NVI_UPSAMPLE_POINTWISE_IMPL=compiled
+NVI_SEMANTIC_BATCH_IMPL=compiled-batched
+```
+
+BW1000 使用全局 BF16 eager、64-thread MS-Deform，其他依赖内实现保持 `legacy`：
+
+```bash
+NVI_AUTOCAST_DTYPE=bfloat16
+NVI_SWIN_ATTENTION_IMPL=legacy
+NVI_SWIN_FFN_IMPL=legacy
+NVI_DECODER_POINTWISE_IMPL=legacy
+NVI_MSDEFORM_IMPL=bw1000-fixed-fp32
+NVI_MSDEFORM_NORM_IMPL=legacy
+NVI_MSDEFORM_FFN_IMPL=legacy
+NVI_UPSAMPLE_POINTWISE_IMPL=legacy
+NVI_SEMANTIC_BATCH_IMPL=legacy
+NVI_USE_CUDA_GRAPH=false
+```
+
+固定形状 MS-Deform 仅适用于生产金字塔 `[[24,32],[48,64],[96,128]]`，其他几何必须
+使用 `legacy`。H100 选择性 BF16 路径只有 fixture 一致性结果，尚无带标注 mIoU，生产
+部署前仍需显式启用并完成任务精度验证。
+
+NPZ 响应默认使用 Deflate level 1，并由独立的 4 线程压缩池编码；编码期间事件循环可继续
+接收请求，调度器也可启动下一批 GPU 推理。响应仍是标准 NPZ，`np.load` 调用和字段名无需
+修改。可通过 `NVI_NPZ_COMPRESSION_LEVEL` 与 `NVI_COMPRESS_THREADS` 调整或回退。
+
+请求调度默认保持 `NVI_BATCH_POLICY=opportunistic`、`NVI_MAX_BATCH_SIZE=4`、
+`NVI_MAX_BATCH_WAIT_MS=0`。请求按源尺寸和输出模式分桶，`return_probs` 不与普通 mask/conf
+混批；CUDA Graph key 包含 batch 内每个输入的 tensor shape 和原始输出尺寸。代码另提供
+`pipeline`、`adaptive`、`fixed` 策略，以及队列时限、失败冷却等参数，但当前 H100 闭环
+压测未发现 1–5 ms 等待的稳定收益，生产默认不启用。
+
+`NVI_PROFILE_SCHEDULER_TIMING=true` 仅用于 Profile：它记录队列、batch 形成、executor、
+CUDA 前向、后处理/D2H 和结果回传时间，并增加 NVTX range。正常服务测量应保持关闭；
+启用后会增加同步并输出请求级 JSON 日志。
 
 ## 构建与运行
 

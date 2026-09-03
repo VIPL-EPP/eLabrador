@@ -1,0 +1,87 @@
+diff --git a/mask2former/modeling/pixel_decoder/msdeformattn.py b/mask2former/modeling/pixel_decoder/msdeformattn.py
+index 18ea85c..2b3df15 100644
+--- a/mask2former/modeling/pixel_decoder/msdeformattn.py
++++ b/mask2former/modeling/pixel_decoder/msdeformattn.py
+@@ -1,5 +1,6 @@
+ # Copyright (c) Facebook, Inc. and its affiliates.
+ import logging
++import os
+ import numpy as np
+ from typing import Callable, Dict, List, Optional, Tuple, Union
+ 
+@@ -19,5 +20,32 @@ from .ops.modules import MSDeformAttn
+ from .ops.modules import MSDeformAttn
+ 
+ 
++_MSDEFORM_NORM_IMPL = os.getenv(
++    "NVI_MSDEFORM_NORM_IMPL", "legacy"
++).strip().lower()
++if _MSDEFORM_NORM_IMPL not in ("legacy", "compiled"):
++    raise ValueError(
++        "NVI_MSDEFORM_NORM_IMPL must be 'legacy' or 'compiled', "
++        f"got {_MSDEFORM_NORM_IMPL!r}"
++    )
++
++
++def _msdeform_residual_norm(
++    source, update, norm_weight, norm_bias, norm_eps
++):
++    return F.layer_norm(
++        source + update,
++        (source.shape[-1],),
++        norm_weight,
++        norm_bias,
++        norm_eps,
++    )
++
++
++_compiled_msdeform_residual_norm = torch.compile(
++    _msdeform_residual_norm, dynamic=False, fullgraph=True
++)
++
++
+ # MSDeformAttn Transformer encoder in deformable detr
+ class MSDeformAttnTransformerEncoderOnly(nn.Module):
+@@ -149,15 +177,37 @@ class MSDeformAttnTransformerEncoderLayer(nn.Module):
+ 
+     def forward_ffn(self, src):
+         src2 = self.linear2(self.dropout2(self.activation(self.linear1(src))))
+-        src = src + self.dropout3(src2)
+-        src = self.norm2(src)
+-        return src
++        if (
++            _MSDEFORM_NORM_IMPL == "compiled"
++            and src.is_cuda
++            and not self.training
++        ):
++            return _compiled_msdeform_residual_norm(
++                src,
++                src2,
++                self.norm2.weight,
++                self.norm2.bias,
++                self.norm2.eps,
++            )
++        return self.norm2(src + self.dropout3(src2))
+ 
+     def forward(self, src, pos, reference_points, spatial_shapes, level_start_index, padding_mask=None):
+         # self attention
+         src2 = self.self_attn(self.with_pos_embed(src, pos), reference_points, src, spatial_shapes, level_start_index, padding_mask)
+-        src = src + self.dropout1(src2)
+-        src = self.norm1(src)
++        if (
++            _MSDEFORM_NORM_IMPL == "compiled"
++            and src.is_cuda
++            and not self.training
++        ):
++            src = _compiled_msdeform_residual_norm(
++                src,
++                src2,
++                self.norm1.weight,
++                self.norm1.bias,
++                self.norm1.eps,
++            )
++        else:
++            src = self.norm1(src + self.dropout1(src2))
+ 
+         # ffn
+         src = self.forward_ffn(src)

@@ -39,6 +39,19 @@ flowchart LR
 
 The edge-side ROS workspace is [`edge/`](edge/). Core ROS packages are under [`edge/src/NVI/`](edge/src/NVI/), and whole-system launch files are under [`edge/src/NVI/nvi_bringup/launch/`](edge/src/NVI/nvi_bringup/launch/).
 
+## Cloud-side Mask2Former Optimization
+
+The optimized service uses a fixed 1024×768 input, disables TTA, and supports request-level batching and independent NPZ compression.
+
+| Platform and configuration | B1 P50/P95 | Throughput |
+| --- | ---: | ---: |
+| H100: CUDA Graph, operator fusion, selective BF16 | 22.162/22.384 ms | 43.988 req/s |
+| BW1000: B1 HIP Graph, global BF16, 64-thread MS-Deform | 113.73/114.57 ms | 8.72 req/s |
+
+The H100 and BW1000 measurements used 160/80 warmup iterations followed by 100 measured iterations. They came from different environments and are not a hardware comparison. Labelled-set mIoU remains pending, so these performance configurations remain opt-in.
+
+For installation, configuration, and startup, see the [Cloud Semantic Server guide](docs/cloud-semantic-server.md).
+
 ## Quick Start
 
 Start from the edge software. Follow [Edge Getting Started](docs/edge-getting-started.md) for prerequisites, dependency installation, local configuration, device checks, build, and first launch.
@@ -58,7 +71,7 @@ cd ..
 ./run_nvi.sh
 ```
 
-Set entry point in `./run_nvi.sh` 
+Set the launch entry point in `./run_nvi.sh`.
 
 Common launch entry points:
 
@@ -72,6 +85,8 @@ Common launch entry points:
 | `nvi_belt.launch` | Vibration belt test |
 
 ## Documentation
+
+Start with the [`docs/README.md`](docs/README.md) documentation index. It groups the user guides, Mask2Former optimization records, and profiling evidence.
 
 - [`docs/system-overview.md`](docs/system-overview.md): system architecture and module map
 - [`docs/edge-getting-started.md`](docs/edge-getting-started.md): edge prerequisites, installation, configuration, device checks, build, and first launch
@@ -129,6 +144,12 @@ If this repository helps your research, please cite:
   url={https://arxiv.org/abs/2505.17659}
 }
 ```
+
+## Cloud Optimization Contribution
+
+中国科学院计算技术研究所高性能计算机研究中心系统软件组
+
+[dtk@ncic.ac.cn](mailto:dtk@ncic.ac.cn)
 
 ## License
 

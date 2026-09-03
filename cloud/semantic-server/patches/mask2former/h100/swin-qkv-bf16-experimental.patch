@@ -1,0 +1,89 @@
+diff --git a/mask2former/modeling/backbone/swin.py b/mask2former/modeling/backbone/swin.py
+--- a/mask2former/modeling/backbone/swin.py
++++ b/mask2former/modeling/backbone/swin.py
+@@ -330,10 +330,12 @@
+             "legacy",
+             "flex-bf16-fused",
+             "flex-bf16-layout-fused",
++            "flex-bf16-layout-qkv",
+         ):
+             raise ValueError(
+                 "NVI_SWIN_ATTENTION_IMPL must be 'legacy', "
+-                "'flex-bf16-fused', or 'flex-bf16-layout-fused', "
++                "'flex-bf16-fused', 'flex-bf16-layout-fused', or "
++                "'flex-bf16-layout-qkv', "
+                 f"got {self.attention_impl!r}"
+             )
+ 
+@@ -364,6 +366,32 @@
+         self.softmax = nn.Softmax(dim=-1)
+         self._relative_position_bias_bf16_cache = None
+         self._attention_mask_bf16_cache = None
++        self._qkv_weight_bf16_cache = None
++        self._qkv_bias_bf16_cache = None
++
++    def project_qkv_spatial(self, x):
++        if self.attention_impl != "flex-bf16-layout-qkv":
++            return self.qkv(x)
++        weight = self._qkv_weight_bf16_cache
++        if weight is None or weight.device != x.device:
++            weight = self.qkv.weight.to(torch.bfloat16)
++            bias = (
++                self.qkv.bias.to(torch.bfloat16)
++                if self.qkv.bias is not None
++                else None
++            )
++            self._qkv_weight_bf16_cache = weight
++            self._qkv_bias_bf16_cache = bias
++        return F.linear(
++            x.to(torch.bfloat16),
++            weight,
++            self._qkv_bias_bf16_cache,
++        )
++
++    def qkv_padding_bias(self):
++        if self.attention_impl == "flex-bf16-layout-qkv":
++            return self._qkv_bias_bf16_cache
++        return self.qkv.bias
+ 
+     def forward(self, x, mask=None):
+         """Forward function.
+@@ -617,7 +645,10 @@
+             _compiled_window_qkv_partition_bf16_by_key.get(spatial_key)
+         )
+         use_spatial_layout_fusion = (
+-            self.attn.attention_impl == "flex-bf16-layout-fused"
++            self.attn.attention_impl in (
++                "flex-bf16-layout-fused",
++                "flex-bf16-layout-qkv",
++            )
+             and compiled_qkv_partition is not None
+             and x.is_cuda
+             and not self.training
+@@ -628,10 +659,10 @@
+             # unpadded BHWC tensor first, then synthesize padded QKV tokens from
+             # the learned bias and fuse roll/partition with the only required
+             # BF16 materialization.
+-            qkv = self.attn.qkv(x)
++            qkv = self.attn.project_qkv_spatial(x)
+             qkv_windows = compiled_qkv_partition(
+                 qkv,
+-                self.attn.qkv.bias,
++                self.attn.qkv_padding_bias(),
+                 self.window_size,
+                 self.shift_size,
+                 Hp,
+@@ -874,8 +905,10 @@
+         # CUDA Graph capture instead of rematerializing it on every replay.
+         cache_mask = (
+             not self.training
+-            and self.blocks[0].attn.attention_impl
+-            == "flex-bf16-layout-fused"
++            and self.blocks[0].attn.attention_impl in (
++                "flex-bf16-layout-fused",
++                "flex-bf16-layout-qkv",
++            )
+         )
+         cache_key = (H, W, x.device.type, x.device.index)
+         attn_mask = self._attention_mask_cache.get(cache_key)
+

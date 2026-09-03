@@ -1,0 +1,15 @@
+--- a/mask2former/modeling/transformer_decoder/mask2former_transformer_decoder.py
++++ b/mask2former/modeling/transformer_decoder/mask2former_transformer_decoder.py
+@@ -395,7 +395,11 @@
+ 
+         for i in range(self.num_layers):
+             level_index = i % self.num_feature_levels
+-            attn_mask[torch.where(attn_mask.sum(-1) == attn_mask.shape[-1])] = False
++            # Rows that mask every position are reset so the layer can attend freely.
++            # torch.where had to report how many such rows exist before the indexed
++            # assignment could be built, which blocked the stream on every layer;
++            # masked_fill_ expresses the same edit as one device-side operation.
++            attn_mask.masked_fill_(attn_mask.all(-1, keepdim=True), False)
+             # attention: cross-attention first
+             output = self.transformer_cross_attention_layers[i](
+                 output, src[level_index],

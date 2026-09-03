@@ -1,0 +1,45 @@
+diff --git a/mask2former/modeling/pixel_decoder/ops/src/cuda/ms_deform_im2col_cuda.cuh b/mask2former/modeling/pixel_decoder/ops/src/cuda/ms_deform_im2col_cuda.cuh
+--- a/mask2former/modeling/pixel_decoder/ops/src/cuda/ms_deform_im2col_cuda.cuh
++++ b/mask2former/modeling/pixel_decoder/ops/src/cuda/ms_deform_im2col_cuda.cuh
+@@ -356,7 +356,7 @@ ms_deform_attn_im2col_bilinear_h100_c32(
+ }
+ 
+-// Opt-in production-shape path: one warp owns the 32 channels of one
+-// (batch, query, head) item. A 2-D grid separates batches, fixed 3x4 sampling
++// Opt-in production-shape path: one 32-thread group owns the 32 channels of
++// one (batch, query, head) item. A 2-D grid separates batches, fixed 3x4 sampling
+ // loops are unrolled, and the fixed feature pyramid stays in immediates.
+ template <typename scalar_t>
+ __global__ void ms_deformable_im2col_gpu_kernel_h100_c32(
+@@ -1061,20 +1061,24 @@ void ms_deformable_im2col_cuda(cudaStream_t stream,
+ {
+   const int num_kernels = batch_size * num_query * num_heads * channels;
+   const int num_actual_kernels = batch_size * num_query * num_heads * channels;
+-  static const bool use_h100_fixed_shape = [] {
++  static const int fixed_shape_threads = [] {
+     const char *mode = std::getenv("NVI_MSDEFORM_IMPL");
+-    return mode != nullptr && std::strcmp(mode, "h100-fixed-fp32") == 0;
++    if (mode != nullptr && std::strcmp(mode, "h100-fixed-fp32") == 0)
++      return 128;
++    if (mode != nullptr && std::strcmp(mode, "bw1000-fixed-fp32") == 0)
++      return 64;
++    return 0;
+   }();
+-  if (use_h100_fixed_shape &&
++  if (fixed_shape_threads > 0 &&
+       channels == 32 && num_heads == 8 && num_levels == 3 && num_point == 4 &&
+       spatial_size == 16128 && num_query == 16128)
+   {
+-    constexpr int num_threads = 128;
+-    constexpr int warps_per_block = num_threads / 32;
++    const int groups_per_block = fixed_shape_threads / 32;
+     const int samples_per_batch = num_query * num_heads;
+-    const dim3 grid(GET_BLOCKS(samples_per_batch, warps_per_block), batch_size);
++    const dim3 grid(
++        GET_BLOCKS(samples_per_batch, groups_per_block), batch_size);
+     ms_deformable_im2col_gpu_kernel_h100_c32<scalar_t>
+-        <<<grid, num_threads, 0, stream>>>(
++        <<<grid, fixed_shape_threads, 0, stream>>>(
+         samples_per_batch, data_value, data_sampling_loc, data_attn_weight,
+         spatial_size, data_col);
+   }

@@ -14,6 +14,7 @@ Unless a file or directory states otherwise, project-owned code is released unde
 | DUtils / DVision | [`edge/src/NVI/nvi_vio/VINS-Mono/pose_graph/src/ThirdParty/DUtils`](../edge/src/NVI/nvi_vio/VINS-Mono/pose_graph/src/ThirdParty/DUtils), [`edge/src/NVI/nvi_vio/VINS-Mono/pose_graph/src/ThirdParty/DVision`](../edge/src/NVI/nvi_vio/VINS-Mono/pose_graph/src/ThirdParty/DVision) | LGPLv3 or later |
 | ASRT Speech Recognition Tool | [`edge/src/NVI/nvi_speech/src/asrt_sdk_ros`](../edge/src/NVI/nvi_speech/src/asrt_sdk_ros) | GPLv3 or later |
 | SensaGram Android APK | [`mobile/android/SensaGram-v1.5.2.apk.1.1`](../mobile/android/SensaGram-v1.5.2.apk.1.1) | Third-party binary from [`UmerCodez/SensaGram`](https://github.com/UmerCodez/SensaGram), release `v1.5.2`; GPL-3.0; copyright remains with the upstream SensaGram authors/contributors |
+| Mask2Former optimization patches | [`cloud/semantic-server/patches/mask2former`](../cloud/semantic-server/patches/mask2former) | Modifications to Meta's Mask2Former sources; the upstream MIT license and copyright notice are retained with the patches |
 
 ## External Services
 

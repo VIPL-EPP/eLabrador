@@ -39,6 +39,19 @@ flowchart LR
 
 端侧 ROS 工作空间为 [`edge/`](edge/)。核心 ROS package 位于 [`edge/src/NVI/`](edge/src/NVI/)，整机启动文件位于 [`edge/src/NVI/nvi_bringup/launch/`](edge/src/NVI/nvi_bringup/launch/)。
 
+## Mask2Former 云侧推理优化
+
+优化后的服务使用固定 1024×768 输入，关闭 TTA，并支持请求级 batch 和独立 NPZ 压缩。
+
+| 平台与配置 | B1 P50/P95 | 吞吐 |
+| --- | ---: | ---: |
+| H100：CUDA Graph、算子融合、选择性 BF16 | 22.162/22.384 ms | 43.988 req/s |
+| BW1000：B1 HIP Graph、全局 BF16、64-thread MS-Deform | 113.73/114.57 ms | 8.72 req/s |
+
+H100 与 BW1000 分别预热 160/80 次，随后测量 100 次。两组结果来自不同环境，不用于硬件间性能比较。带标注验证集 mIoU 尚未完成，因此这些性能配置需显式启用。
+
+安装、配置和启动方法见[云侧语义服务使用说明](docs/cloud-semantic-server.zh-CN.md)。
+
 ## 快速开始
 
 建议从端侧软件开始。请阅读 [端侧入门](docs/edge-getting-started.zh-CN.md)，其中包含前置条件、依赖安装、本地配置、设备检查、构建和首次启动。
@@ -58,7 +71,8 @@ cd ..
 ./run_nvi.sh
 ```
 
-`./run_nvi.sh` 中可按需设置启动入口
+`./run_nvi.sh` 中可按需设置启动入口。
+
 常用启动入口：
 
 | 启动文件 | 用途 |
@@ -71,6 +85,8 @@ cd ..
 | `nvi_belt.launch` | 震动腰带测试 |
 
 ## 文档
+
+建议先看 [`docs/README.zh-CN.md`](docs/README.zh-CN.md) 文档导航；它按使用场景、Mask2Former 优化阶段和原始工件分类现有资料。
 
 - [`docs/system-overview.zh-CN.md`](docs/system-overview.zh-CN.md)：系统架构和模块地图
 - [`docs/edge-getting-started.zh-CN.md`](docs/edge-getting-started.zh-CN.md)：端侧前置条件、依赖安装、本地配置、设备检查、构建和首次启动
@@ -128,6 +144,12 @@ cd ..
   url={https://arxiv.org/abs/2505.17659}
 }
 ```
+
+## 云端优化贡献
+
+中国科学院计算技术研究所高性能计算机研究中心系统软件组
+
+[dtk@ncic.ac.cn](mailto:dtk@ncic.ac.cn)
 
 ## 许可证
 
